@@ -18,12 +18,12 @@
     "vite": "^5.3.3",
     "vite-plugin-checker": "^0.6.4",
     "vite-plugin-vuetify": "~2.0.3",
+    "vite-plugin-wasm": "^3.3.0",
     "vue-tsc": "~1.8.27"
   },
   "dependencies": {
-    "@coreui/bootstrap-vue": "^1.0.0-beta.0",
     "@protobuf-ts/runtime": "~2.9.4",
-    "bootstrap": "^5.3.3",
+    "brotli-dec-wasm": "^2.3.0",
     "vue": "~3.4.31",
     "vuetify": "~3.6.11"
   }

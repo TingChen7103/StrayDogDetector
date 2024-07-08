@@ -2,7 +2,24 @@ import { createApp } from "vue";
 import App from "@/App.vue";
 import * as store from '@/store';
 
-import 'bootstrap/dist/css/bootstrap.min.css';
+// vuetify
+import 'vuetify/styles';
+import { createVuetify } from 'vuetify';
+import { aliases, mdi } from 'vuetify/iconsets/mdi-svg';
+
+
+const vuetify = createVuetify({
+    theme: {
+        defaultTheme: 'dark',
+    },
+    icons: {
+        defaultSet: 'mdi',
+        aliases,
+        sets: {
+            mdi,
+        },
+    },
+});
 
 const app = createApp(App);
 
@@ -18,4 +35,5 @@ app.config.errorHandler = (err) => {
 }
 
 app
+    .use(vuetify)
     .mount("#app");

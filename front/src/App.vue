@@ -1,55 +1,110 @@
 <template>
     <p>mabi damage meter</p>
-    <template v-for="v, i in filteredEntityList" v-bind:key="i">
-        <p>{{ v.Name }} {{ v.TotalDamage.toFixed(0) }}</p>
-        <CProgress :height="32">
-            <CProgressBar v-for="damageByAttacker, attackerId in v.TotalDamageByAttacker" v-bind:key="attackerId" @click="showDetailDamageList(v.Id, attackerId)" :value="100 * damageByAttacker / v.TotalDamage"
-                variant="striped" animated :style="`background-color: ${getNameColor(entityMap[attackerId]?.Name)}`">
-                {{ entityMap[attackerId]?.Name || attackerId }} {{ damageByAttacker.toFixed(0) }}
-            </CProgressBar>
-        </CProgress>
+    <v-expansion-panels multiple v-for="v, k in entityGroupMap" v-bind:key="k">
+        <template v-if="v.TotalDamage > 0">
+            <v-expansion-panel>
+                <v-expansion-panel-title>
+                    <v-sheet>
+                        {{ v.Name }} {{ v.TotalDamage.toFixed(0) }}
+                    </v-sheet>
 
-        <CModal :visible="!!detailDialogData" @close="() => { detailDialogData = undefined }">
-            <CModalHeader>
-                <CModalTitle>{{ detailDialogData?.attackerName }} -> {{ detailDialogData?.targetName }}</CModalTitle>
-            </CModalHeader>
-            <CModalBody>
-                <CContainer v-for="v, i in detailDialogData?.Damages" v-bind:key="i">
+                </v-expansion-panel-title>
+                <v-expansion-panel-text class="pa-3">
+                    <template v-for="entity, entityk in v.EntityMap" v-bind:key="entityk">
+                        <template v-if="entity.TotalDamage > 0">
+                            <v-sheet>
+                                {{ entity.Name }} {{ entity.TotalDamage.toFixed(0) }} {{ entity.FinisherId ? `Killed by
+                                ${entityMap[entity.FinisherId]?.Name || entity.FinisherId}` : '' }}
+                                <template v-for="cond in entity.ConditionMap" v-bind:key="cond.CCId">
+                                    <img width="16" height="16"
+                                        @mouseover="e => setCondTooltip(e.target! as HTMLElement, cond)"
+                                        @mouseleave="e => setCondTooltip(e.target! as HTMLElement, undefined)"
+                                        @click="e => setCondTooltip(e.target! as HTMLElement, cond)"
+                                        :src='`http://localhost:${__api_port}/res/characterconditionimage/${region}/${cond.CCId}/${cond.CCId}.png`'>
+                                    </img>
+                                </template>
+                            </v-sheet>
+
+                            <v-sheet width="100%" :height="32" color="grey-lighten-3"
+                                class="d-flex my-4 rounded-xl overflow-hidden">
+                                <template v-for="damageByAttacker, attackerId in entity.TotalDamageByAttacker"
+                                    v-bind:key="attackerId">
+                                    <v-sheet @click="showEntityDetailDamageList(entity.Id, attackerId)"
+                                        :color="getMabiNameColor(entityMap[attackerId]?.Name)" height="100%"
+                                        :width="`${Math.round(100 * damageByAttacker / entity.TotalDamage).toFixed(0)}%`"
+                                        class="text-center align-center">
+                                        {{ entityMap[attackerId]?.Name || attackerId }} {{ damageByAttacker.toFixed(0)
+                                        }}
+                                    </v-sheet>
+                                </template>
+                            </v-sheet>
+                        </template>
+                    </template>
+                </v-expansion-panel-text>
+            </v-expansion-panel>
+            <v-sheet width="100%" :height="32" color="grey-lighten-3" class="d-flex mb-4 rounded-xl overflow-hidden">
+                <template v-for="damageByAttacker, attackerId in v.TotalDamageByAttacker" v-bind:key="attackerId">
+                    <v-sheet @click.stop="showEntityGroupDetailDamageList(v.Id, attackerId)"
+                        :color="getMabiNameColor(entityMap[attackerId]?.Name)" height="100%"
+                        :width="`${Math.round(100 * damageByAttacker / v.TotalDamage).toFixed(0)}%`"
+                        class="text-center align-center">
+                        {{ entityMap[attackerId]?.Name || attackerId }} {{ damageByAttacker.toFixed(0) }}
+                    </v-sheet>
+                </template>
+            </v-sheet>
+        </template>
+
+    </v-expansion-panels>
+
+    <v-dialog v-model="detailDialog" min-width="60vw">
+        <v-card>
+            <v-card-text>
+                <p>{{ detailDialogData?.attackerName }} -> {{ detailDialogData?.targetName }}</p>
+
+                <v-sheet v-for="v, i in detailDialogData?.Damages" v-bind:key="i">
+                    <p>
+                        <template v-for="cond in v.Conditions" v-bind:key="cond.CCId">
+                            <img width="16" height="16" @mouseover="e => setCondTooltip(e.target! as HTMLElement, cond)"
+                                @mouseleave="e => setCondTooltip(e.target! as HTMLElement, undefined)"
+                                @click="e => setCondTooltip(e.target! as HTMLElement, cond)"
+                                :src='`http://localhost:${__api_port}/res/characterconditionimage/${region}/${cond.CCId}/${cond.CCId}.png`'>
+                            </img>
+                        </template>
+                        ->
+                        <template v-for="cond in v.TargetConditions" v-bind:key="cond.CCId">
+                            <img width="16" height="16" @mouseover="e => setCondTooltip(e.target! as HTMLElement, cond)"
+                                @mouseleave="e => setCondTooltip(e.target! as HTMLElement, undefined)"
+                                @click="e => setCondTooltip(e.target! as HTMLElement, cond)"
+                                :src='`http://localhost:${__api_port}/res/characterconditionimage/${region}/${cond.CCId}/${cond.CCId}.png`'>
+                            </img>
+                        </template>
+                    </p>
                     <p>
                         <img width="32" height="32"
-                    :src='`http://localhost:${__api_port}/res/skillimage/${region}/${v.SkillId}/${v.SkillId}.png`' />
+                            :src='`http://localhost:${__api_port}/res/skillimage/${region}/${v.SkillId}/${v.SkillId}.png`' />
                         {{ skillNameMap[v.SkillId] }} {{ v.Damage.toFixed(0) }} {{ v.IsCritical ? '크리티컬' : '' }}
                     </p>
-                </CContainer>
-
-            </CModalBody>
-            <CModalFooter>
-                <CButton color="secondary" @click="() => { detailDialogData = undefined }">
-                    Close
-                </CButton>
-            </CModalFooter>
-        </CModal>
-    </template>
+                </v-sheet>
+            </v-card-text>
+            <v-card-actions>
+                <v-btn color="primary" block @click="detailDialog = false">Close</v-btn>
+            </v-card-actions>
+        </v-card>
+    </v-dialog>
+    <v-tooltip v-if="condTooltip" v-model="condTooltipValue" :activator="condTooltipParent">
+        {{ condNameMap[condTooltip.CCId] }}
+    </v-tooltip>
 </template>
 
 <script lang="ts">
 import { defineComponent, onMounted, inject, ref, computed } from "vue";
+import { VTooltip } from 'vuetify/components';
 
-import { CProgressBar, CProgress, CModal, CModalHeader, CModalTitle, CModalBody, CModalFooter, CButton, CContainer } from '@coreui/bootstrap-vue';
+import * as protocols from '@/protocols';
+import { getMabiNameColor } from '@/util';
 
 export default defineComponent({
     name: "App",
-    components: {
-        CProgressBar,
-        CProgress,
-        CModal,
-        CModalHeader,
-        CModalTitle,
-        CModalBody,
-        CModalFooter,
-        CButton,
-        CContainer,
-    },
     setup() {
         const isLoading = inject('isLoading');
         const region = inject('region');
@@ -66,16 +121,33 @@ export default defineComponent({
                 console.log("socket open");
             };
             socket.value.onmessage = e => {
-                const event = JSON.parse(e.data) as eventBase;
+                const event = JSON.parse(e.data) as protocols.eventBase;
+                console.log(event);
+
                 switch (event?.EventId) {
-                    case 1:
-                        const entityAppear = event as eventEntityAppear;
+                    case protocols.eventIdEntityAppear:
+                        const entityAppear = event as protocols.eventEntityAppear;
                         onEventEntityAppear(entityAppear);
                         break;
 
-                    case 3:
-                        const damage = event as eventDamage;
+                    case protocols.eventIdDamage:
+                        const damage = event as protocols.eventDamage;
                         onEventDamage(damage);
+                        break;
+
+                    case protocols.eventIdCharacterConditionEnable:
+                        const conditionEnable = event as protocols.eventCharacterConditionEnable;
+                        onEventCharacterConditionEnable(conditionEnable);
+                        break;
+
+                    case protocols.eventIdCharacterConditionDisable:
+                        const conditionDisable = event as protocols.eventCharacterConditionDisable;
+                        onEventCharacterConditionDisable(conditionDisable);
+                        break;
+
+                    case protocols.eventIdFinish:
+                        const finish = event as protocols.eventFinish;
+                        onEventFinish(finish);
                         break;
                 }
             };
@@ -94,31 +166,54 @@ export default defineComponent({
             };
         };
 
-        
-        const onEventEntityAppear = (event: eventEntityAppear) => {
+
+        const onEventEntityAppear = (event: protocols.eventEntityAppear) => {
             const origName = event.Name;
             let name = origName;
-            if (name[0] == '_') {
-                // npc
-                return;
-            }
+            const isPc = pcRaceSet.has(event.RaceId);
 
-            if (name[0] >= '0' && name[0] <= '9') {
+            if (!isPc) {
                 // mob, field mob은 pool이 돈다
                 name = `${raceNameMap.value[event.RaceId]}(${event.Id.substring(event.Id.length - 4)})`
             }
 
-            entityMap.value[event.Id] = {
+            const prevEntity = entityMap.value[event.Id];
+            const entity = entityMap.value[event.Id] = {
                 Id: event.Id,
                 Name: name,
                 OrigName: origName,
                 TotalDamage: 0,
                 Damages: [],
                 TotalDamageByAttacker: {},
+                ConditionMap: {},
+                FinisherId: '',
+                Group: undefined! as entityGroup,
             };
+
+            const groupId = pcRaceSet.has(event.RaceId) ? event.Id : `${event.RaceId}`;
+
+            const group = entityGroupMap.value[groupId] ??= {
+                Id: groupId,
+                Name: isPc ? name : raceNameMap.value[event.RaceId],
+                EntityMap: {},
+                TotalDamage: 0,
+                Damages: [],
+                TotalDamageByAttacker: {},
+            };
+
+            if (prevEntity) {
+                group.TotalDamage -= prevEntity.TotalDamage;
+                group.Damages = group.Damages.filter(v => v.Id != prevEntity.Id);
+                for (const attackerId in prevEntity.TotalDamageByAttacker) {
+                    group.TotalDamageByAttacker[attackerId] -= prevEntity.TotalDamageByAttacker[attackerId];
+                }
+            }
+
+            group.EntityMap[event.Id] = entity;
+            entity.Group = group;
         };
 
-        const onEventDamage = (event: eventDamage) => {
+        const onEventDamage = (event: protocols.eventDamage) => {
             const id = event.TargetId;
             const entity = entityMap.value[id];
             if (!entity) {
@@ -126,22 +221,80 @@ export default defineComponent({
                 return;
             }
 
+            const attackerEntity = entityMap.value[event.Id];
+            const damageData: entityDamage = {
+                ...event,
+                Conditions: attackerEntity ? Object.values(attackerEntity.ConditionMap) : [],
+                TargetConditions: Object.values(entity.ConditionMap),
+            }
+
             entityMap.value[id].TotalDamage += event.Damage;
-            entityMap.value[id].Damages.push(event);
+            entityMap.value[id].Damages.push(damageData);
 
             if (!entity.TotalDamageByAttacker[event.Id]) {
                 entity.TotalDamageByAttacker[event.Id] = 0;
             }
 
             entity.TotalDamageByAttacker[event.Id] += event.Damage;
+
+            entity.Group.TotalDamage += event.Damage;
+            entity.Group.Damages.push(damageData);
+            if (!entity.Group.TotalDamageByAttacker[event.Id]) {
+                entity.Group.TotalDamageByAttacker[event.Id] = 0;
+            }
+
+            entity.Group.TotalDamageByAttacker[event.Id] += event.Damage;
         };
 
-        const showDetailDamageList = (targetId: string, attackerId: string) => {
+        const onEventCharacterConditionEnable = (event: protocols.eventCharacterConditionEnable) => {
+            const id = event.Id;
+            const entity = entityMap.value[id];
+            if (!entity) {
+                // ?
+                return;
+            }
+
+            entity.ConditionMap[event.CCId] = {
+                Id: id,
+                CCId: event.CCId,
+                DisableAt: event.DisableAt,
+                AttackerId: event.AttackerId,
+            };
+        };
+
+        const onEventCharacterConditionDisable = (event: protocols.eventCharacterConditionDisable) => {
+            const id = event.Id;
+            const entity = entityMap.value[id];
+            if (!entity) {
+                // ?
+                return;
+            }
+
+            delete entity.ConditionMap[event.CCId];
+        };
+
+        const onEventFinish = (event: protocols.eventFinish) => {
+            if (!event.AttackerId) {
+                return;
+            }
+
+            const entity = entityMap.value[event.Id];
+            if (!entity) {
+                // ?
+                return;
+            }
+
+            entity.FinisherId = event.AttackerId;
+            console.log(entity.Name, 'killed by', entityMap.value[event.AttackerId]?.Name || event.AttackerId);
+        };
+
+        const showEntityDetailDamageList = (targetId: string, attackerId: string) => {
             const entity = entityMap.value[targetId];
             if (!entity) {
                 return;
             }
 
+            detailDialog.value = true;
             detailDialogData.value = {
                 targetName: entity.Name,
                 attackerName: entityMap.value[attackerId]?.Name || attackerId,
@@ -149,15 +302,39 @@ export default defineComponent({
             };
         }
 
-        const entityMap = ref<Record<string, entityInfo>>({});
-        const filteredEntityList = computed<entityInfo[]>(() => {
-            return Object.values(entityMap.value).filter(v => v.TotalDamage > 0);
-        });
+        const showEntityGroupDetailDamageList = (targetId: string, attackerId: string) => {
+            const group = entityGroupMap.value[targetId];
+            if (!group) {
+                return;
+            }
 
-        const detailDialogData = ref<{targetName: string; attackerName: string; Damages: entityDamage[]}>();
+            detailDialog.value = true;
+            detailDialogData.value = {
+                targetName: group.Name,
+                attackerName: entityMap.value[attackerId]?.Name || attackerId,
+                Damages: group.Damages.filter(v => v.Id == attackerId),
+            };
+        }
+
+        const entityGroupMap = ref<Record<string, entityGroup>>({});
+        const entityMap = ref<Record<string, entityInfo>>({});
+
+        const detailDialog = ref(false);
+        const detailDialogData = ref<{ targetName: string; attackerName: string; Damages: entityDamage[] }>();
 
         const raceNameMap = ref<Record<number, string>>({});
         const skillNameMap = ref<Record<number, string>>({});
+        const condNameMap = ref<Record<number, string>>({});
+
+        const condTooltipParent = ref<HTMLElement>();
+        const condTooltipValue = ref(false);
+        const condTooltip = ref<entityCondition>();
+
+        const setCondTooltip = (el: HTMLElement, cond?: entityCondition) => {
+            condTooltip.value = cond;
+            condTooltipParent.value = el;
+            condTooltipValue.value = !!cond;
+        }
 
         onMounted(async () => {
             regionList.value = ['kr', 'krt', 'cn', 'jp', 'tw', 'us'];
@@ -177,6 +354,13 @@ export default defineComponent({
                     skillNameMap.value[v.Id] = db.value.getCurLangString(v.Name);
                 }
             }
+            {
+                const list = await db.value.getSortedListData('CharCondList');
+
+                for (const v of list) {
+                    condNameMap.value[v.Id] = db.value.getCurLangString(v.Name);
+                }
+            }
 
             openSocket();
         });
@@ -186,60 +370,33 @@ export default defineComponent({
             region,
 
             entityMap,
-            filteredEntityList,
+            entityGroupMap,
+
+            detailDialog,
             detailDialogData,
 
-            skillNameMap, 
+            skillNameMap,
+            condNameMap,
 
-            showDetailDamageList,
-            getNameColor,
+            condTooltip,
+            condTooltipParent,
+            condTooltipValue,
+            setCondTooltip,
+
+            showEntityDetailDamageList,
+            showEntityGroupDetailDamageList,
+            getMabiNameColor,
         }
     }
 });
 
-function getNameColor(name: string): string {
-    // https://mabinoger.com/color_sim.htm
-    const colCalc = (i: number) => (i * 101) % 97 + 159;
-
-    // if (name.length < 3) {
-    //     return '#808080';
-    // }
-
-    const ccolor = [0, 0, 0];
-    // R = (ASCII Char 1,4,7,10
-    // G = (ASCII Char 2,5,8,11
-    // B = (ASCII Char 3,6,9,12
-    //                          * 101) mod 97) + 159
-    for (var i = 0; i < name.length; i++) {
-        ccolor[i % 3] += name.charCodeAt(i);
-    }
-    ccolor[0] = colCalc(ccolor[0]);
-    ccolor[1] = colCalc(ccolor[1]);
-    ccolor[2] = colCalc(ccolor[2]);
-
-    return '#' + ccolor.map(v => v.toString(16).padStart(2, '0')).join('');
-}
-
-type eventId = number;
-
-type eventBase = {
-    EventId: eventId;
-}
-
-type eventEntityAppear = eventBase & {
-    EventId: 1;
+type entityGroup = {
     Id: string;
     Name: string;
-    RaceId: number;
-}
-
-type eventDamage = eventBase & {
-    EventId: 3;
-    Id: string;
-    TargetId: string;
-    SkillId: number;
-    Damage: number;
-    IsCritical: boolean;
+    EntityMap: Record<string, entityInfo>;
+    TotalDamage: number;
+    Damages: entityDamage[];
+    TotalDamageByAttacker: Record<string, number>;
 }
 
 type entityInfo = {
@@ -249,6 +406,9 @@ type entityInfo = {
     TotalDamage: number;
     Damages: entityDamage[];
     TotalDamageByAttacker: Record<string, number>;
+    ConditionMap: Record<number, entityCondition>;
+    FinisherId: string;
+    Group: entityGroup;
 }
 
 type entityDamage = {
@@ -257,6 +417,17 @@ type entityDamage = {
     SkillId: number;
     Damage: number;
     IsCritical: boolean;
+    Conditions: entityCondition[];
+    TargetConditions: entityCondition[];
 }
+
+type entityCondition = {
+    Id: string;
+    CCId: number;
+    DisableAt: number;
+    AttackerId: string;
+}
+
+const pcRaceSet = new Set<number>([8001, 8002, 9001, 9002, 10001, 10002]);
 
 </script>

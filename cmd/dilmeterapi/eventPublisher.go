@@ -32,8 +32,10 @@ const (
 	opcodeEntityDisappear   = 0x520d
 	opcodeEntitiesAppear    = 0x5334
 	opcodeEntitiesDisappear = 0x5335
+	opcodeSetFinisher       = 0x7921
 	opcodeCombatAction      = 0x7926
 	opcodeEffectDelayed     = 0x9092
+	opcodeConditionUpdate   = 0xa028
 )
 
 func newEventPublisher(ctx context.Context, r *packet.GameServerPacketReader) *eventPublisher {
@@ -80,7 +82,7 @@ func (t *eventPublisher) loop() {
 					continue
 				}
 
-				if entity.Name[0] == '_' {
+				if len(entity.Name) <= 0 || entity.Name[0] == '_' {
 					// ignore npc
 					continue
 				}
@@ -93,8 +95,8 @@ func (t *eventPublisher) loop() {
 					eventBase: eventBase{
 						EventId: eventIdEntityAppear,
 						At:      time.Now().Unix(),
+						Id:      strconv.FormatUint(entity.Id, 10),
 					},
-					Id:     strconv.FormatUint(entity.Id, 10),
 					Name:   entity.Name,
 					RaceId: entity.RaceId,
 				}
@@ -118,8 +120,8 @@ func (t *eventPublisher) loop() {
 					eventBase: eventBase{
 						EventId: eventIdEntityDisappear,
 						At:      time.Now().Unix(),
+						Id:      strconv.FormatUint(id, 10),
 					},
-					Id: strconv.FormatUint(id, 10),
 				}
 				t.publish(e)
 
@@ -134,7 +136,7 @@ func (t *eventPublisher) loop() {
 
 				now := time.Now().Unix()
 				for _, entity := range entities {
-					if entity.Name[0] == '_' {
+					if len(entity.Name) <= 0 || entity.Name[0] == '_' {
 						// ignore npc
 						continue
 					}
@@ -147,8 +149,8 @@ func (t *eventPublisher) loop() {
 						eventBase: eventBase{
 							EventId: eventIdEntityAppear,
 							At:      now,
+							Id:      strconv.FormatUint(entity.Id, 10),
 						},
-						Id:     strconv.FormatUint(entity.Id, 10),
 						Name:   entity.Name,
 						RaceId: entity.RaceId,
 					}
@@ -168,7 +170,10 @@ func (t *eventPublisher) loop() {
 				now := time.Now().Unix()
 				for i := 0; i < count; i++ {
 					// ttype, id, unk1 (if ttype == 16)
-					if len(msg) < 2 || msg[1].Type() != packet.MessageElemTypeLong {
+					if len(msg) < 2 ||
+						msg[0].Type() != packet.MessageElemTypeShort ||
+						msg[1].Type() != packet.MessageElemTypeLong {
+
 						logger.Println("invalid packet")
 
 						for j, m := range p.Msg {
@@ -178,7 +183,7 @@ func (t *eventPublisher) loop() {
 						break
 					}
 
-					ttype := msg[0].Data().(uint8)
+					ttype := msg[0].Data().(uint16)
 					id := msg[1].Data().(uint64)
 
 					t.Lock()
@@ -189,17 +194,42 @@ func (t *eventPublisher) loop() {
 						eventBase: eventBase{
 							EventId: eventIdEntityDisappear,
 							At:      now,
+							Id:      strconv.FormatUint(id, 10),
 						},
-						Id: strconv.FormatUint(id, 10),
 					}
 					t.publish(e)
 
 					msg = msg[2:]
 
-					if ttype == 16 && len(msg) < 1 {
+					if ttype == 16 && len(msg) >= 1 {
 						msg = msg[1:]
 					}
 				}
+				continue
+
+			case opcodeSetFinisher:
+				// set finisher
+				if len(p.Msg) < 1 || p.Msg[0].Type() != packet.MessageElemTypeLong {
+					logger.Println("invalid packet")
+					continue
+				}
+
+				attackerId := p.Msg[0].Data().(uint64)
+				attackerIdStr := ""
+				if attackerId != 0 {
+					attackerIdStr = strconv.FormatUint(attackerId, 10)
+				}
+
+				e := &eventFinish{
+					eventBase: eventBase{
+						EventId: eventIdFinish,
+						At:      time.Now().Unix(),
+						Id:      strconv.FormatUint(p.Id, 10),
+					},
+					AttackerId: attackerIdStr,
+				}
+				t.publish(e)
+
 				continue
 
 			case opcodeCombatAction:
@@ -251,8 +281,8 @@ func (t *eventPublisher) loop() {
 						eventBase: eventBase{
 							EventId: eventIdDamage,
 							At:      time.Now().Unix(),
+							Id:      strconv.FormatUint(attackerId, 10),
 						},
-						Id:         strconv.FormatUint(attackerId, 10),
 						TargetId:   strconv.FormatUint(targetId, 10),
 						SkillId:    attackSkillId,
 						Damage:     damage,
@@ -267,16 +297,22 @@ func (t *eventPublisher) loop() {
 				// effect delayed, 연공 블래스트 대미지가 이걸로 날라옴
 				targetId := p.Id
 
-				if len(p.Msg) < 1 && p.Msg[0].Type() != packet.MessageElemTypeInt {
+				if len(p.Msg) < 2 ||
+					p.Msg[0].Type() != packet.MessageElemTypeInt ||
+					p.Msg[1].Type() != packet.MessageElemTypeInt {
+
 					logger.Println("invalid packet")
 					continue
 				}
 
-				ttype := p.Msg[0].Data().(uint32)
-				if ttype != 0 {
+				delay := p.Msg[0].Data().(uint32)
+				ttype := p.Msg[1].Data().(uint32)
+				if ttype != 314 {
 					// 연공 블래스트가 아님
 					continue
 				}
+
+				_ = delay
 
 				if len(p.Msg) < 7 {
 					logger.Println("invalid packet")
@@ -319,11 +355,53 @@ func (t *eventPublisher) loop() {
 					eventBase: eventBase{
 						EventId: eventIdDamage,
 						At:      time.Now().Unix(),
+						Id:      strconv.FormatUint(attackerId, 10),
 					},
-					Id:       strconv.FormatUint(attackerId, 10),
 					TargetId: strconv.FormatUint(targetId, 10),
 					SkillId:  attackSkillId,
 					Damage:   float32(damage),
+				}
+				t.publish(e)
+
+				continue
+
+			case opcodeConditionUpdate:
+				// condition update
+				cond, err := packet.ParseCharacterConditionPacket(p)
+				if err != nil {
+					logger.Println("ParseCharacterConditionPacket failed:", err)
+					continue
+				}
+
+				t.entityCache.addCondition(cond)
+
+				if !cond.IsEnable {
+					e := &eventCharacterConditionDisable{
+						eventBase: eventBase{
+							EventId: eventIdCharacterConditionDisable,
+							At:      time.Now().Unix(),
+							Id:      strconv.FormatUint(cond.Id, 10),
+						},
+						CCId: cond.CCId,
+					}
+					t.publish(e)
+					continue
+				}
+
+				attackerId := ""
+				if cond.AttackerId != 0 {
+					attackerId = strconv.FormatUint(cond.AttackerId, 10)
+				}
+
+				e := &eventCharacterConditionEnable{
+					eventBase: eventBase{
+						EventId: eventIdCharacterConditionEnable,
+						At:      time.Now().Unix(),
+						Id:      strconv.FormatUint(cond.Id, 10),
+					},
+					CCId:       cond.CCId,
+					DisableAt:  cond.DisableAt,
+					AttackerId: attackerId,
 				}
 				t.publish(e)
 
@@ -364,14 +442,9 @@ func (t *eventPublisher) publish(e iEvent) {
 
 func (t *eventPublisher) addClient(ctx context.Context, ch chan<- iEvent) uint32 {
 	t.Lock()
-	defer t.Unlock()
-
 	t.currentClientId++
 	clientId := t.currentClientId
-	t.clientMap[clientId] = &eventClient{
-		ctx: ctx,
-		ch:  ch,
-	}
+	t.Unlock()
 
 	now := time.Now().Unix()
 	for _, entity := range t.entityCache {
@@ -379,13 +452,39 @@ func (t *eventPublisher) addClient(ctx context.Context, ch chan<- iEvent) uint32
 			eventBase: eventBase{
 				EventId: eventIdEntityAppear,
 				At:      now,
+				Id:      strconv.FormatUint(entity.Id, 10),
 			},
-			Id:     strconv.FormatUint(entity.Id, 10),
 			Name:   entity.Name,
 			RaceId: entity.RaceId,
 		}
 		ch <- e
+
+		for _, cond := range entity.characterConditionMap {
+			attackerId := ""
+			if cond.AttackerId != 0 {
+				attackerId = strconv.FormatUint(cond.AttackerId, 10)
+			}
+
+			e := &eventCharacterConditionEnable{
+				eventBase: eventBase{
+					EventId: eventIdCharacterConditionEnable,
+					At:      now,
+					Id:      strconv.FormatUint(entity.Id, 10),
+				},
+				CCId:       cond.CCId,
+				DisableAt:  cond.DisableAt,
+				AttackerId: attackerId,
+			}
+			ch <- e
+		}
 	}
+
+	t.Lock()
+	t.clientMap[clientId] = &eventClient{
+		ctx: ctx,
+		ch:  ch,
+	}
+	t.Unlock()
 
 	return clientId
 }

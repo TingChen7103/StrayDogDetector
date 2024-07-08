@@ -6,6 +6,9 @@ const (
 	eventIdEntityAppear eventId = 1 + iota
 	eventIdEntityDisappear
 	eventIdDamage
+	eventIdCharacterConditionEnable
+	eventIdCharacterConditionDisable
+	eventIdFinish
 )
 
 type iEvent interface {
@@ -15,6 +18,7 @@ type iEvent interface {
 type eventBase struct {
 	EventId eventId
 	At      int64
+	Id      string
 }
 
 func (t *eventBase) GetEventId() eventId {
@@ -23,21 +27,35 @@ func (t *eventBase) GetEventId() eventId {
 
 type eventEntityAppear struct {
 	eventBase
-	Id     string
 	Name   string
 	RaceId uint32
 }
 
 type eventEntityDisappear struct {
 	eventBase
-	Id string
 }
 
 type eventDamage struct {
 	eventBase
-	Id         string
 	TargetId   string
 	SkillId    uint16
 	Damage     float32
 	IsCritical bool
+}
+
+type eventCharacterConditionEnable struct {
+	eventBase
+	CCId       uint32
+	DisableAt  int64
+	AttackerId string
+}
+
+type eventCharacterConditionDisable struct {
+	eventBase
+	CCId uint32
+}
+
+type eventFinish struct {
+	eventBase
+	AttackerId string
 }

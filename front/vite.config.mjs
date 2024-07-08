@@ -3,6 +3,7 @@ import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import vuetify from 'vite-plugin-vuetify';
 import checker from 'vite-plugin-checker';
+import wasm from 'vite-plugin-wasm';
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -12,6 +13,7 @@ export default defineConfig({
         checker({
             vueTsc: true,
         }),
+        wasm(),
     ],
     server: {
         port: 8031,
@@ -20,5 +22,10 @@ export default defineConfig({
         alias: {
             '@': path.resolve(__dirname, './src'),
         },
+    },
+    optimizeDeps: {
+        exclude: [
+            "brotli-dec-wasm",
+        ],
     },
 });

@@ -1,4 +1,5 @@
 import { ref, Ref } from 'vue';
+import brotliPromise from 'brotli-dec-wasm';
 
 import { ResourceData, ResourceVersion } from '@/protos/resourcedata';
 
@@ -13,7 +14,17 @@ export function resVerCall(path: string, opt?: HttpCallOpt): Promise<ResourceVer
 export async function resDataCall(path: string, opt?: HttpCallOpt): Promise<ResourceData> {
     const buf = await httpCallRaw(`${resUrl.value}${path}`, opt);
 
-    return ResourceData.fromBinary(new Uint8Array(buf));
+    try {
+        loadingCount.value++;
+        const brotli = await brotliPromise;
+        const u8 = new Uint8Array(buf);
+        
+        const dec = brotli.decompress(u8);
+        return ResourceData.fromBinary(dec);
+    }
+    finally {
+        loadingCount.value--;
+    }
 }
 
 export type HttpCallOpt = {

@@ -321,7 +321,7 @@ export class MabiDB {
 }
 
 async function loadServerResourceData(region: string): Promise<ResourceData> {
-    const d = await resDataCall(`resourcedata/${region}/${region}_resourcedata.bin`);
+    const d = await resDataCall(`resourcedata/${region}/${region}_resourcedata.bin.br`);
 
     return d;
 }

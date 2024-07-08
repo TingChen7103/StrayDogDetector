@@ -152,6 +152,8 @@ func ParseCombatActionPackPacket(p *GamePacket) (*CombatActionPackPacket, error)
 }
 
 func parseCombatActionPacket(id uint64, msg Message) (*CombatActionPacket, error) {
+	origMsg := msg
+
 	if msg[0].Type() != MessageElemTypeInt {
 		return nil, fmt.Errorf("parseCombatActionPacket: combatActionId has unexpected type %v", msg[1].Type())
 	}
@@ -241,9 +243,16 @@ func parseCombatActionPacket(id uint64, msg Message) (*CombatActionPacket, error
 
 		msg = msg[7:]
 
-		if (options&CombatActionAttackerOptionsUseEffect) != 0 && len(msg) >= 1 {
-			// prop id?
-			msg = msg[1:]
+		if (options & CombatActionAttackerOptionsUseEffect) != 0 {
+			if len(msg) >= 1 && msg[0].Type() == MessageElemTypeLong {
+				// prop id?
+				msg = msg[1:]
+
+				_ = origMsg
+				// for i, v := range origMsg {
+				// 	logger.Println("* msg", i, v.Type(), v.String())
+				// }
+			}
 		}
 	}
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"sync"
 	"time"
 
 	"gitlab.com/prilus/mabidilmeter/packet"
@@ -10,18 +11,27 @@ type entityCache map[uint64]*entityInfoExtend
 
 type entityInfoExtend struct {
 	*packet.EntityInfo
-	DisappearAt int64
+	sync.Mutex
+	disappearAt           int64
+	characterConditionMap map[uint32]*entityCharacterCondition
 }
 
-func (t entityCache) add(e *packet.EntityInfo) {
-	if e, ok := t[e.Id]; ok {
-		e.DisappearAt = 0
+type entityCharacterCondition struct {
+	CCId       uint32
+	DisableAt  int64
+	AttackerId uint64
+}
+
+func (t entityCache) add(p *packet.EntityInfo) {
+	if e, ok := t[p.Id]; ok {
+		e.disappearAt = 0
 		return
 	}
 
-	t[e.Id] = &entityInfoExtend{
-		EntityInfo:  e,
-		DisappearAt: 0,
+	t[p.Id] = &entityInfoExtend{
+		EntityInfo:            p,
+		disappearAt:           0,
+		characterConditionMap: make(map[uint32]*entityCharacterCondition),
 	}
 	t.cleanup()
 }
@@ -30,9 +40,45 @@ func (t entityCache) disappear(id uint64) {
 	// at을 외부에서 받아야할 수 도 있음 생각보다 느림
 	at := time.Now().Unix()
 
-	if v, ok := t[id]; ok {
-		v.DisappearAt = at
+	e := t[id]
+	if e == nil {
+		return
 	}
+
+	e.disappearAt = at
+}
+
+func (t entityCache) addCondition(p *packet.CharacterConditionPacket) {
+	e := t[p.Id]
+	if e == nil {
+		return
+	}
+
+	if !p.IsEnable {
+		e.Lock()
+		delete(e.characterConditionMap, p.CCId)
+		e.Unlock()
+		return
+	}
+
+	newCond := &entityCharacterCondition{
+		CCId:       p.CCId,
+		DisableAt:  p.DisableAt,
+		AttackerId: p.AttackerId,
+	}
+
+	e.Lock()
+	e.characterConditionMap[p.CCId] = newCond
+	e.Unlock()
+
+	go func() {
+		time.Sleep(time.Until(time.Unix(p.DisableAt, 0)))
+		e.Lock()
+		if cond := e.characterConditionMap[p.CCId]; cond != nil && cond.DisableAt == p.DisableAt {
+			delete(e.characterConditionMap, p.CCId)
+		}
+		e.Unlock()
+	}()
 }
 
 func (t entityCache) cleanup() {
@@ -40,18 +86,18 @@ func (t entityCache) cleanup() {
 	mobRemoveSec, userRemoveSec := int64(1*60), int64(5*60)
 
 	for k, v := range t {
-		if v.DisappearAt == 0 {
+		if v.disappearAt == 0 {
 			continue
 		}
 
 		if v.IsUser() {
-			if now-v.DisappearAt > userRemoveSec {
+			if now-v.disappearAt > userRemoveSec {
 				delete(t, k)
 			}
 			continue
 		}
 
-		if now-v.DisappearAt > mobRemoveSec {
+		if now-v.disappearAt > mobRemoveSec {
 			delete(t, k)
 		}
 	}
