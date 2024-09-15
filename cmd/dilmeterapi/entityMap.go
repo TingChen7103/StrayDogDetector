@@ -84,9 +84,20 @@ func (t entityCache) addCondition(p *packet.CharacterConditionPacket) {
 func (t entityCache) cleanup() {
 	now := time.Now().Unix()
 	mobRemoveSec, userRemoveSec := int64(1*60), int64(5*60)
+	noDisappearMobRemoveSec, noDisappearUserRemoveSec := int64(12*60*60), int64(3*60*60)
 
 	for k, v := range t {
 		if v.disappearAt == 0 {
+			if v.IsUser() {
+				if now-v.disappearAt > noDisappearUserRemoveSec {
+					delete(t, k)
+				}
+			}
+
+			if now-v.disappearAt > noDisappearMobRemoveSec {
+				delete(t, k)
+			}
+
 			continue
 		}
 
