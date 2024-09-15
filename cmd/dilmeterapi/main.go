@@ -10,6 +10,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"time"
 
 	"gitlab.com/prilus/mabidilmeter/packet"
 	"gitlab.com/prilus/mabidilmeter/pcaputil"
@@ -47,7 +48,7 @@ func main() {
 		defer wsCtxCancel()
 		defer close(ch)
 
-		pub.addClient(wsCtx, ch)
+		go pub.addClient(wsCtx, ch)
 
 		packetReceiveLoop := func() {
 			for {
@@ -91,6 +92,9 @@ func main() {
 					logger.Printf("Can't send: %s", err.Error())
 					return
 				}
+
+			case <-time.After(2 * time.Second):
+				logger.Println("send timeout", ws.RemoteAddr())
 			}
 		}
 	})

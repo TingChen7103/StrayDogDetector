@@ -373,7 +373,9 @@ func (t *eventPublisher) loop() {
 					continue
 				}
 
+				t.Lock()
 				t.entityCache.addCondition(cond)
+				t.Unlock()
 
 				if !cond.IsEnable {
 					e := &eventCharacterConditionDisable{
@@ -447,6 +449,10 @@ func (t *eventPublisher) addClient(ctx context.Context, ch chan<- iEvent) uint32
 	t.Unlock()
 
 	now := time.Now().Unix()
+	// bulk write 필요할듯
+	events := []iEvent(nil)
+
+	t.Lock()
 	for _, entity := range t.entityCache {
 		e := &eventEntityAppear{
 			eventBase: eventBase{
@@ -457,7 +463,8 @@ func (t *eventPublisher) addClient(ctx context.Context, ch chan<- iEvent) uint32
 			Name:   entity.Name,
 			RaceId: entity.RaceId,
 		}
-		ch <- e
+
+		events = append(events, e)
 
 		for _, cond := range entity.characterConditionMap {
 			attackerId := ""
@@ -475,8 +482,14 @@ func (t *eventPublisher) addClient(ctx context.Context, ch chan<- iEvent) uint32
 				DisableAt:  cond.DisableAt,
 				AttackerId: attackerId,
 			}
-			ch <- e
+
+			events = append(events, e)
 		}
+	}
+	t.Unlock()
+
+	for _, e := range events {
+		ch <- e
 	}
 
 	t.Lock()
