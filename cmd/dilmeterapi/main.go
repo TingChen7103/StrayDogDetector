@@ -87,14 +87,12 @@ func main() {
 				return
 
 			case e := <-ch:
+				ws.SetWriteDeadline(time.Now().Add(3 * time.Second))
 				err := websocket.JSON.Send(ws, e)
 				if err != nil {
 					logger.Printf("Can't send: %s", err.Error())
 					return
 				}
-
-			case <-time.After(2 * time.Second):
-				logger.Println("send timeout", ws.RemoteAddr())
 			}
 		}
 	})
