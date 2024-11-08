@@ -32,7 +32,7 @@ type GameServerPacketReaderOpt struct {
 
 const pcapQueueSize = 100
 const pcapBufferSize = 32 * 1024 * 1024
-const pcapPromise = false
+const pcapPromisc = true
 const packetQueueSize = 100
 
 var ErrTooShortPacket = errors.New("too short packet")
@@ -99,7 +99,7 @@ func (t *GameServerPacketReader) packetLoop(payloadCh <-chan []byte) {
 }
 
 func (t *GameServerPacketReader) openNic(nic string, filter string) (<-chan []byte, error) {
-	handle, err := pcap.OpenLive(nic, pcapBufferSize, pcapPromise, pcap.BlockForever)
+	handle, err := pcap.OpenLive(nic, pcapBufferSize, pcapPromisc, pcap.BlockForever)
 	if err != nil {
 		return nil, err
 	}
