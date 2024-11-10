@@ -437,6 +437,7 @@ func (t *eventPublisher) publish(e iEvent) {
 		default:
 			// queue full
 			delete(t.clientMap, k)
+			logger.Println("queue full... force close socket", k)
 			continue
 		}
 	}

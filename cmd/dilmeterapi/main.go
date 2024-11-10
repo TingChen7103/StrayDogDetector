@@ -30,10 +30,18 @@ func main() {
 	defer cancel()
 
 	nicName := getNic()
+	fileName := ""
+	if nicName == "file" {
+		nicName = ""
+		if len(os.Args) > 2 {
+			fileName = os.Args[2]
+		}
+	}
 
 	r, err := packet.NewGameServerPacketReader(&packet.GameServerPacketReaderOpt{
-		Ctx:     ctx,
-		NicName: nicName,
+		Ctx:      ctx,
+		NicName:  nicName,
+		FileName: fileName,
 	})
 	if err != nil {
 		logger.Fatalln("NewGameServerPacketReader failed:", err)
@@ -44,7 +52,9 @@ func main() {
 	startWebsocketServer(func(ws *websocket.Conn) {
 		logger.Printf("Client connected from %s", ws.RemoteAddr())
 		wsCtx, wsCtxCancel := context.WithCancel(ws.Request().Context())
-		ch := make(chan iEvent, 100)
+
+		// 생각보다 websocket이 send queue 비워지는게 느리다
+		ch := make(chan iEvent, 10000)
 		defer wsCtxCancel()
 		defer close(ch)
 

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"time"
 
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/layers"
@@ -26,6 +27,7 @@ type GameServerPacketReader struct {
 
 type GameServerPacketReaderOpt struct {
 	Ctx      context.Context
+	FileName string
 	NicName  string
 	ClientIp string
 }
@@ -55,10 +57,20 @@ func NewGameServerPacketReader(opt *GameServerPacketReaderOpt) (*GameServerPacke
 		packetCh: make(chan *GamePacket, packetQueueSize),
 	}
 
-	payloadCh, err := v.openNic(opt.NicName, filter)
-	if err != nil {
-		logger.Println("openNic failed", err)
-		return nil, err
+	payloadCh := (<-chan []byte)(nil)
+	err := error(nil)
+	if opt.FileName != "" {
+		payloadCh, err = v.openFile(opt.FileName, filter)
+		if err != nil {
+			logger.Println("openFile failed", err)
+			return nil, err
+		}
+	} else {
+		payloadCh, err = v.openNic(opt.NicName, filter)
+		if err != nil {
+			logger.Println("openNic failed", err)
+			return nil, err
+		}
 	}
 
 	go v.packetLoop(payloadCh)
@@ -92,6 +104,7 @@ func (t *GameServerPacketReader) packetLoop(payloadCh <-chan []byte) {
 			}
 
 			if msg != nil {
+				// logger.Println("game packet", msg.Op, msg.Id, len(msg.Msg))
 				t.packetCh <- msg
 			}
 		}
@@ -101,6 +114,7 @@ func (t *GameServerPacketReader) packetLoop(payloadCh <-chan []byte) {
 func (t *GameServerPacketReader) openNic(nic string, filter string) (<-chan []byte, error) {
 	handle, err := pcap.OpenLive(nic, pcapBufferSize, pcapPromisc, pcap.BlockForever)
 	if err != nil {
+		logger.Println(err)
 		return nil, err
 	}
 	t.handle = handle
@@ -109,32 +123,72 @@ func (t *GameServerPacketReader) openNic(nic string, filter string) (<-chan []by
 		return nil, err
 	}
 
-	dlc := gopacket.DecodingLayerContainer(gopacket.DecodingLayerArray(nil))
-	dlc.Put(new(layers.Ethernet))
-	dlc.Put(new(layers.IPv4))
-	dlc.Put(new(layers.TCP))
-
 	ch := make(chan []byte, pcapQueueSize)
-	ps := gopacket.NewPacketSource(handle, handle.LinkType())
+	// ps := gopacket.NewPacketSource(handle, handle.LinkType())
 
-	go func() {
-		for packet := range ps.Packets() {
-			tl := packet.TransportLayer()
-			if tl == nil {
-				// empty (ack?)
-				continue
-			}
-
-			payload := tl.LayerPayload()
-			if len(payload) == 0 {
-				continue
-			}
-
-			ch <- payload
-		}
-	}()
+	go t.readPacketLoop(ch)
 
 	return ch, nil
+}
+
+func (t *GameServerPacketReader) openFile(file string, filter string) (<-chan []byte, error) {
+	handle, err := pcap.OpenOffline(file)
+	if err != nil {
+		logger.Println(err)
+		return nil, err
+	}
+
+	if err := handle.SetBPFFilter(filter); err != nil { // optional
+		logger.Println(err)
+		return nil, err
+	}
+
+	t.handle = handle
+
+	ch := make(chan []byte, pcapQueueSize)
+
+	time.AfterFunc(20*time.Second, func() {
+		logger.Println("start readPacketLoop", file)
+		go t.readPacketLoop(ch)
+	})
+
+	return ch, nil
+}
+
+func (t *GameServerPacketReader) readPacketLoop(ch chan<- []byte) {
+	ethLayer := layers.Ethernet{}
+	ip4Layer := layers.IPv4{}
+	tcpLayer := layers.TCP{}
+	payload := gopacket.Payload{}
+
+	layerParser := gopacket.NewDecodingLayerParser(layers.LayerTypeEthernet, &ethLayer, &ip4Layer, &tcpLayer, &payload)
+	packetLayers := []gopacket.LayerType(nil)
+
+	for i := 0; t.ctx.Err() == nil; i++ {
+		b, ci, err := t.handle.ReadPacketData()
+		if err != nil {
+			logger.Println(err)
+			break
+		}
+
+		_ = ci
+
+		if err := layerParser.DecodeLayers(b, &packetLayers); err != nil {
+			logger.Println(err)
+			continue
+		}
+
+		for _, layer := range packetLayers {
+			if layer == layers.LayerTypeTCP && len(tcpLayer.Payload) > 0 {
+				ch <- tcpLayer.Payload
+				break
+			}
+		}
+
+		if i&((1<<10)-1) == 0 {
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
 }
 
 func (t *GameServerPacketReader) Close() {
