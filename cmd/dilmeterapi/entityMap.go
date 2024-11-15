@@ -12,6 +12,7 @@ type entityCache map[uint64]*entityInfoExtend
 type entityInfoExtend struct {
 	*packet.EntityInfo
 	sync.Mutex
+	appearAt              int64
 	disappearAt           int64
 	characterConditionMap map[uint32]*entityCharacterCondition
 }
@@ -23,13 +24,17 @@ type entityCharacterCondition struct {
 }
 
 func (t entityCache) add(p *packet.EntityInfo) {
+	at := time.Now().Unix()
+
 	if e, ok := t[p.Id]; ok {
+		e.appearAt = at
 		e.disappearAt = 0
 		return
 	}
 
 	t[p.Id] = &entityInfoExtend{
 		EntityInfo:            p,
+		appearAt:              at,
 		disappearAt:           0,
 		characterConditionMap: make(map[uint32]*entityCharacterCondition),
 	}
@@ -89,12 +94,12 @@ func (t entityCache) cleanup() {
 	for k, v := range t {
 		if v.disappearAt == 0 {
 			if v.IsUser() {
-				if now-v.disappearAt > noDisappearUserRemoveSec {
+				if now-v.appearAt > noDisappearUserRemoveSec {
 					delete(t, k)
 				}
 			}
 
-			if now-v.disappearAt > noDisappearMobRemoveSec {
+			if now-v.appearAt > noDisappearMobRemoveSec {
 				delete(t, k)
 			}
 

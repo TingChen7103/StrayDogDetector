@@ -489,6 +489,8 @@ func (t *eventPublisher) addClient(ctx context.Context, ch chan<- iEvent) uint32
 	}
 	t.Unlock()
 
+	logger.Println("send initial data", clientId, ", ", len(events), "events")
+
 	for _, e := range events {
 		ch <- e
 	}
