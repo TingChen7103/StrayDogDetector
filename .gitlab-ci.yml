@@ -1,0 +1,18 @@
+default:
+  image: registry.gitlab.com/prilus/mabidilmeter/buildimage
+
+build:
+  stage: build
+  script:
+    # front build
+    - cd front
+    - npm install && npm run build
+    - cp -r dist/* ../cmd/dilmeterapi/static
+    - cd ..
+    # api build
+    - GOOS=windows GOARCH=amd64 go build  -ldflags="-s -w" -trimpath ./cmd/dilmeterapi
+    - zip -e -P $ZIP_PASSWORD dilmeterapi.zip dilmeterapi.exe
+  artifacts:
+    paths:
+      - dilmeterapi.zip
+    expire_in: 30 days
