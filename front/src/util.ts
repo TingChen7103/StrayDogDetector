@@ -15,7 +15,7 @@ export function getMabiNameColor(name: string): string {
     // G = (ASCII Char 2,5,8,11
     // B = (ASCII Char 3,6,9,12
     //                          * 101) mod 97) + 159
-    for (var i = 0; i < name.length; i++) {
+    for (let i = 0; i < name.length; i++) {
         ccolor[i % 3] += name.charCodeAt(i);
     }
     ccolor[0] = colCalc(ccolor[0]);

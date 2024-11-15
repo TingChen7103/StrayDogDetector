@@ -1,5 +1,8 @@
 <template>
-    <p>mabi damage meter</p>
+    <v-sheet width="100svw" class="d-flex">
+        <span style="text-wrap-mode: nowrap;">mabi damage meter, api {{ socketConnected ? 'connected' : 'disconnected' }}</span>
+        <v-divider />
+        <v-btn @click="clearData" :loading="isLoading" color="primary" size="small">Clear</v-btn></v-sheet>
     <v-expansion-panels multiple v-for="v, k in entityGroupMap" v-bind:key="k">
         <template v-if="v.TotalDamage > 0">
             <v-expansion-panel>
@@ -20,8 +23,7 @@
                                         @mouseover="e => setCondTooltip(e.target! as HTMLElement, cond)"
                                         @mouseleave="e => setCondTooltip(e.target! as HTMLElement, undefined)"
                                         @click="e => setCondTooltip(e.target! as HTMLElement, cond)"
-                                        :src='`http://localhost:${__api_port}/res/characterconditionimage/${region}/${cond.CCId}/${cond.CCId}.png`'>
-                                    </img>
+                                        :src='`http://localhost:${__api_port}/res/characterconditionimage/${region}/${cond.CCId}/${cond.CCId}.png`' />
                                 </template>
                             </v-sheet>
 
@@ -67,16 +69,14 @@
                             <img width="16" height="16" @mouseover="e => setCondTooltip(e.target! as HTMLElement, cond)"
                                 @mouseleave="e => setCondTooltip(e.target! as HTMLElement, undefined)"
                                 @click="e => setCondTooltip(e.target! as HTMLElement, cond)"
-                                :src='`http://localhost:${__api_port}/res/characterconditionimage/${region}/${cond.CCId}/${cond.CCId}.png`'>
-                            </img>
+                                :src='`http://localhost:${__api_port}/res/characterconditionimage/${region}/${cond.CCId}/${cond.CCId}.png`' />
                         </template>
                         ->
                         <template v-for="cond in v.TargetConditions" v-bind:key="cond.CCId">
                             <img width="16" height="16" @mouseover="e => setCondTooltip(e.target! as HTMLElement, cond)"
                                 @mouseleave="e => setCondTooltip(e.target! as HTMLElement, undefined)"
                                 @click="e => setCondTooltip(e.target! as HTMLElement, cond)"
-                                :src='`http://localhost:${__api_port}/res/characterconditionimage/${region}/${cond.CCId}/${cond.CCId}.png`'>
-                            </img>
+                                :src='`http://localhost:${__api_port}/res/characterconditionimage/${region}/${cond.CCId}/${cond.CCId}.png`' />
                         </template>
                     </p>
                     <p>
@@ -97,8 +97,7 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, onMounted, inject, ref, computed } from "vue";
-import { VTooltip } from 'vuetify/components';
+import { defineComponent, onMounted, inject, ref } from "vue";
 
 import * as protocols from '@/protocols';
 import { getMabiNameColor } from '@/util';
@@ -108,47 +107,60 @@ export default defineComponent({
     setup() {
         const isLoading = inject('isLoading');
         const region = inject('region');
-        const lang = inject('lang');
+        // const lang = inject('lang');
         const regionList = inject('regionList');
         const db = inject('db');
 
         const socket = ref<WebSocket>();
+        const socketConnected = ref(false);
 
         const openSocket = () => {
             const s = socket.value = new WebSocket(`ws://localhost:${__api_port}/ws`)
+            setTimeout(() => {
+                if (s.readyState == WebSocket.CONNECTING) {
+                    console.log('connection timeout...');
+                    s.close();
+                }
+            }, 5000);
 
             socket.value.onopen = () => {
                 console.log("socket open");
+                socketConnected.value = true;
             };
             socket.value.onmessage = e => {
                 const event = JSON.parse(e.data) as protocols.eventBase;
                 console.log(event);
 
                 switch (event?.EventId) {
-                    case protocols.eventIdEntityAppear:
+                    case protocols.eventIdEntityAppear: {
                         const entityAppear = event as protocols.eventEntityAppear;
                         onEventEntityAppear(entityAppear);
                         break;
+                    }
 
-                    case protocols.eventIdDamage:
+                    case protocols.eventIdDamage: {
                         const damage = event as protocols.eventDamage;
                         onEventDamage(damage);
                         break;
+                    }
 
-                    case protocols.eventIdCharacterConditionEnable:
+                    case protocols.eventIdCharacterConditionEnable: {
                         const conditionEnable = event as protocols.eventCharacterConditionEnable;
                         onEventCharacterConditionEnable(conditionEnable);
                         break;
+                    }
 
-                    case protocols.eventIdCharacterConditionDisable:
+                    case protocols.eventIdCharacterConditionDisable: {
                         const conditionDisable = event as protocols.eventCharacterConditionDisable;
                         onEventCharacterConditionDisable(conditionDisable);
                         break;
+                    }
 
-                    case protocols.eventIdFinish:
+                    case protocols.eventIdFinish: {
                         const finish = event as protocols.eventFinish;
                         onEventFinish(finish);
                         break;
+                    }
                 }
             };
 
@@ -160,6 +172,7 @@ export default defineComponent({
             };
             socket.value.onclose = e => {
                 console.log('socket close', e);
+                socketConnected.value = false;
                 s.close();
 
                 setTimeout(openSocket, 0);
@@ -336,6 +349,22 @@ export default defineComponent({
             condTooltipValue.value = !!cond;
         }
 
+        const clearData = () => {
+            for (const k in entityGroupMap.value) {
+                const v = entityGroupMap.value[k];
+                v.TotalDamage = 0;
+                v.Damages = [];
+                v.TotalDamageByAttacker = {};
+            }
+
+            for (const k in entityMap.value) {
+                const v = entityMap.value[k];
+                v.TotalDamage = 0;
+                v.Damages = [];
+                v.TotalDamageByAttacker = {};
+            }
+        }
+
         onMounted(async () => {
             regionList.value = ['kr', 'krt', 'cn', 'jp', 'tw', 'us'];
 
@@ -367,7 +396,10 @@ export default defineComponent({
 
         return {
             __api_port,
+            isLoading,
             region,
+
+            socketConnected,
 
             entityMap,
             entityGroupMap,
@@ -382,6 +414,7 @@ export default defineComponent({
             condTooltipParent,
             condTooltipValue,
             setCondTooltip,
+            clearData,
 
             showEntityDetailDamageList,
             showEntityGroupDetailDamageList,
