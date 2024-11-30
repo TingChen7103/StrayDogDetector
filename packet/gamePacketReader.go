@@ -164,6 +164,10 @@ func (t *GameServerPacketReader) readPacketLoop(ch chan<- []byte) {
 	layerParser := gopacket.NewDecodingLayerParser(layers.LayerTypeEthernet, &ethLayer, &ip4Layer, &tcpLayer, &payload)
 	packetLayers := []gopacket.LayerType(nil)
 
+	// 패킷 순서 섞이는 것 땜빵
+	nextSeq, prevDstPort := uint32(0), layers.TCPPort(0)
+	pendingTcpLayers := make([]layers.TCP, 0, packetQueueSize)
+
 	for i := 0; t.ctx.Err() == nil; i++ {
 		b, ci, err := t.handle.ReadPacketData()
 		if err != nil {
@@ -179,10 +183,102 @@ func (t *GameServerPacketReader) readPacketLoop(ch chan<- []byte) {
 		}
 
 		for _, layer := range packetLayers {
-			if layer == layers.LayerTypeTCP && len(tcpLayer.Payload) > 0 {
-				ch <- tcpLayer.Payload
+			if layer != layers.LayerTypeTCP || len(tcpLayer.Payload) < 1 {
+				continue
+			}
+
+			if nextSeq != 0 && tcpLayer.Seq != nextSeq {
+				// connection이 바뀐 경우 (채널 이동등)
+				if prevDstPort != tcpLayer.DstPort {
+					for _, v := range pendingTcpLayers {
+						ch <- v.Payload
+					}
+
+					pendingTcpLayers = pendingTcpLayers[:0]
+					prevDstPort = tcpLayer.DstPort
+
+					ch <- tcpLayer.Payload
+					nextSeq = tcpLayer.Seq + uint32(len(tcpLayer.Payload))
+					break
+				}
+
+				// align 틀어짐
+				logger.Println("packet align error", i, nextSeq, tcpLayer.Seq)
+
+				if tcpLayer.Seq < nextSeq {
+					if tcpLayer.Seq+uint32(len(tcpLayer.Payload)) >= nextSeq {
+						// 겹치는 부분 버려서 해결이 되는 경우
+						payload := tcpLayer.Payload[nextSeq-tcpLayer.Seq:]
+						if len(payload) > 0 {
+							ch <- payload
+						}
+
+						nextSeq = tcpLayer.Seq + uint32(len(tcpLayer.Payload))
+						break
+					}
+				}
+
+				if len(pendingTcpLayers) == packetQueueSize {
+					// 꽉 찬 경우 보류 목록을 보내고 비워버림
+					for _, v := range pendingTcpLayers {
+						ch <- v.Payload
+					}
+
+					pendingTcpLayers = pendingTcpLayers[:0]
+
+					ch <- tcpLayer.Payload
+					nextSeq = tcpLayer.Seq + uint32(len(tcpLayer.Payload))
+					break
+				}
+
+				pendingTcpLayers = append(pendingTcpLayers, tcpLayer)
 				break
 			}
+
+			ch <- tcpLayer.Payload
+			nextSeq = tcpLayer.Seq + uint32(len(tcpLayer.Payload))
+			prevDstPort = tcpLayer.DstPort
+
+			if len(pendingTcpLayers) > 0 {
+				/*
+					align이 틀어지는 경우
+					1. 재전송 - 재전송일 경우 겹치는 부분을 버려야 한다
+					2. out of order - 앞 패킷이 뒤에 오는 경우
+				*/
+
+				for _, v := range pendingTcpLayers {
+					if v.Seq == nextSeq {
+						ch <- v.Payload
+						nextSeq = v.Seq + uint32(len(v.Payload))
+						pendingTcpLayers = pendingTcpLayers[1:]
+						continue
+					}
+
+					if v.Seq < nextSeq {
+						payload := v.Payload
+
+						if v.Seq+uint32(len(v.Payload)) < nextSeq {
+							pendingTcpLayers = pendingTcpLayers[1:]
+							continue
+						}
+
+						// 겹치는 부분 버림
+						payload = payload[nextSeq-v.Seq:]
+						if len(payload) > 0 {
+							ch <- payload
+						}
+
+						nextSeq = v.Seq + uint32(len(v.Payload))
+						pendingTcpLayers = pendingTcpLayers[1:]
+						continue
+					}
+
+					// 아직 못받은 패킷이 있다
+					break
+				}
+			}
+
+			break
 		}
 
 		if i&((1<<10)-1) == 0 {
