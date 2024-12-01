@@ -73,36 +73,57 @@ const (
 )
 
 func ParseCombatActionPackPacket(p *GamePacket) (*CombatActionPackPacket, error) {
-	if p.Msg[0].Type() != MessageElemTypeInt {
-		return nil, fmt.Errorf("ParseCombatActionPacket: id has unexpected type %v", p.Msg[0].Type())
+	msg := p.Msg
+
+	if msg[0].Type() != MessageElemTypeInt {
+		return nil, fmt.Errorf("ParseCombatActionPacket: id has unexpected type %v", msg[0].Type())
 	}
-	if p.Msg[1].Type() != MessageElemTypeInt {
-		return nil, fmt.Errorf("ParseCombatActionPacket: prevId has unexpected type %v", p.Msg[1].Type())
+	if msg[1].Type() != MessageElemTypeInt {
+		return nil, fmt.Errorf("ParseCombatActionPacket: prevId has unexpected type %v", msg[1].Type())
 	}
-	if p.Msg[2].Type() != MessageElemTypeByte {
-		return nil, fmt.Errorf("ParseCombatActionPacket: hit has unexpected type %v", p.Msg[2].Type())
+	if msg[2].Type() != MessageElemTypeByte {
+		return nil, fmt.Errorf("ParseCombatActionPacket: hit has unexpected type %v", msg[2].Type())
 	}
-	if p.Msg[3].Type() != MessageElemTypeByte {
-		return nil, fmt.Errorf("ParseCombatActionPacket: ttype has unexpected type %v", p.Msg[3].Type())
+	if msg[3].Type() != MessageElemTypeByte {
+		return nil, fmt.Errorf("ParseCombatActionPacket: ttype has unexpected type %v", msg[3].Type())
 	}
-	if p.Msg[4].Type() != MessageElemTypeByte {
-		return nil, fmt.Errorf("ParseCombatActionPacket: unk1 has unexpected type %v", p.Msg[4].Type())
+	if msg[4].Type() != MessageElemTypeByte {
+		return nil, fmt.Errorf("ParseCombatActionPacket: unk1 has unexpected type %v", msg[4].Type())
 	}
-	if p.Msg[5].Type() != MessageElemTypeByte {
-		return nil, fmt.Errorf("ParseCombatActionPacket: flag has unexpected type %v", p.Msg[5].Type())
-	}
-	if p.Msg[6].Type() != MessageElemTypeInt {
-		return nil, fmt.Errorf("ParseCombatActionPacket: subPacketCount has unexpected type %v", p.Msg[6].Type())
+	if msg[5].Type() != MessageElemTypeByte {
+		return nil, fmt.Errorf("ParseCombatActionPacket: flag has unexpected type %v", msg[5].Type())
 	}
 
-	actionPackId := p.Msg[0].Data().(uint32)
-	actionPackPrevId := p.Msg[1].Data().(uint32)
-	hit := p.Msg[2].Data().(uint8) != 0
-	ttype := p.Msg[3].Data().(uint8)
-	unk1 := p.Msg[4].Data().(uint8)
-	flag := p.Msg[5].Data().(uint8)
-	subPacketCount := p.Msg[6].Data().(uint32)
-	msg := p.Msg[7:]
+	actionPackId := msg[0].Data().(uint32)
+	actionPackPrevId := msg[1].Data().(uint32)
+	hit := msg[2].Data().(uint8) != 0
+	ttype := msg[3].Data().(uint8)
+	unk1 := msg[4].Data().(uint8)
+	flag := msg[5].Data().(uint8)
+
+	msg = msg[6:]
+
+	// 공격이 막혔을 때?
+	if (flag & 0x1) != 0 {
+		if msg[0].Type() != MessageElemTypeInt {
+			return nil, fmt.Errorf("ParseCombatActionPacket: blockedByShieldPosX has unexpected type %v", msg[0].Type())
+		}
+		if msg[1].Type() != MessageElemTypeInt {
+			return nil, fmt.Errorf("ParseCombatActionPacket: blockedByShieldPosY has unexpected type %v", msg[1].Type())
+		}
+		if msg[2].Type() != MessageElemTypeLong {
+			return nil, fmt.Errorf("ParseCombatActionPacket: shieldCasterId has unexpected type %v", msg[2].Type())
+		}
+
+		msg = msg[3:]
+	}
+
+	if msg[0].Type() != MessageElemTypeInt {
+		return nil, fmt.Errorf("ParseCombatActionPacket: subPacketCount has unexpected type %v", msg[6].Type())
+	}
+
+	subPacketCount := msg[0].Data().(uint32)
+	msg = msg[1:]
 
 	// logger.Printf("packet op %x id %x", p.Op, p.Id)
 	// logger.Println("id", id, "prevId", prevId, "hit", hit, "ttype", ttype, "unk1", unk1, "flag", flag, "packetCount", subPacketCount)
@@ -118,6 +139,11 @@ func ParseCombatActionPackPacket(p *GamePacket) (*CombatActionPackPacket, error)
 	}
 
 	for i := 0; i < int(subPacketCount); i++ {
+		if msg[1].Type() != MessageElemTypeBin {
+			err := fmt.Errorf("ParseCombatActionPacket: subPacket has unexpected type %v", msg[1].Type())
+			return nil, err
+		}
+
 		subPacketBuf := msg[1].Data().([]byte)
 		msg = msg[2:]
 
