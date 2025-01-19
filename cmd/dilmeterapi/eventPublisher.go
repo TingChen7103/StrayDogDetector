@@ -34,7 +34,7 @@ const (
 	opcodeEntitiesDisappear = 0x5335
 	opcodeSetFinisher       = 0x7921
 	opcodeCombatAction      = 0x7926
-	opcodeEffectDelayed     = 0x9092
+	opcodeEffectDelayed     = 0x9094
 	opcodeConditionUpdate   = 0xa028
 )
 
@@ -301,13 +301,17 @@ func (t *eventPublisher) loop() {
 					p.Msg[0].Type() != packet.MessageElemTypeInt ||
 					p.Msg[1].Type() != packet.MessageElemTypeInt {
 
+					for i, msg := range p.Msg {
+						logger.Println("* msg", i, msg.Type(), msg.String())
+					}
+
 					logger.Println("invalid packet")
 					continue
 				}
 
 				delay := p.Msg[0].Data().(uint32)
 				ttype := p.Msg[1].Data().(uint32)
-				if ttype != 314 {
+				if ttype != 316 {
 					// 연공 블래스트가 아님
 					continue
 				}
