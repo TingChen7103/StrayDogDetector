@@ -1,6 +1,7 @@
 <template>
     <v-sheet width="100svw" class="d-flex">
-        <span style="text-wrap-mode: nowrap;">mabi damage meter, api {{ socketConnected ? 'connected' : 'disconnected' }}</span>
+        <span style="text-wrap-mode: nowrap;">mabi damage meter, api {{ socketConnected ? 'connected' : 'disconnected'
+            }}</span>
         <v-divider />
         <v-btn @click="clearData" :loading="isLoading" color="primary" size="small">Clear</v-btn></v-sheet>
     <v-expansion-panels multiple v-for="v, k in entityGroupMap" v-bind:key="k">
@@ -16,7 +17,7 @@
                     <template v-for="entity, entityk in v.EntityMap" v-bind:key="entityk">
                         <template v-if="entity.TotalDamage > 0">
                             <v-sheet>
-                                {{ entity.Name }} {{ entity.TotalDamage.toFixed(0) }} {{ entity.FinisherId ? `Killed by
+                                * {{ entity.Name }} {{ entity.TotalDamage.toFixed(0) }} {{ entity.FinisherId ? `Killed by
                                 ${entityMap[entity.FinisherId]?.Name || entity.FinisherId}` : '' }}
                                 <template v-for="cond in entity.ConditionMap" v-bind:key="cond.CCId">
                                     <img width="16" height="16"
@@ -27,64 +28,87 @@
                                 </template>
                             </v-sheet>
 
-                            <v-sheet width="100%" :height="32" color="grey-lighten-3"
-                                class="d-flex my-4 rounded-xl overflow-hidden">
-                                <template v-for="damageByAttacker, attackerId in entity.TotalDamageByAttacker"
-                                    v-bind:key="attackerId">
-                                    <v-sheet @click="showEntityDetailDamageList(entity.Id, attackerId)"
+                            <v-sheet
+                                v-for="[attackerId, damageByAttacker] in Object.entries(entity.TotalDamageByAttacker).sort((a, b) => b[1] - a[1])"
+                                v-bind:key="attackerId" width="100%" class="mb-4">
+                                <!-- 이름 -->
+                                <v-sheet width="100%" @click.stop="showEntityDetailDamageList(entity.Id, attackerId)">
+                                    {{ entityMap[attackerId]?.Name || attackerId }} {{ damageByAttacker.toFixed(0) }} {{
+                                        (100 * damageByAttacker / entity.TotalDamage).toFixed(1) }}%
+                                </v-sheet>
+
+                                <!-- 막대 -->
+                                <v-sheet width="100%" height="16">
+                                    <v-sheet @click.stop="showEntityGroupDetailDamageList(entity.Id, attackerId)"
                                         :color="getMabiNameColor(entityMap[attackerId]?.Name)" height="100%"
                                         :width="`${Math.round(100 * damageByAttacker / entity.TotalDamage).toFixed(0)}%`"
-                                        class="text-center align-center">
-                                        {{ entityMap[attackerId]?.Name || attackerId }} {{ damageByAttacker.toFixed(0)
-                                        }}
+                                        class="rounded-xl">
                                     </v-sheet>
-                                </template>
+                                </v-sheet>
                             </v-sheet>
                         </template>
                     </template>
                 </v-expansion-panel-text>
             </v-expansion-panel>
-            <v-sheet width="100%" :height="32" color="grey-lighten-3" class="d-flex mb-4 rounded-xl overflow-hidden">
-                <template v-for="damageByAttacker, attackerId in v.TotalDamageByAttacker" v-bind:key="attackerId">
+            <v-sheet
+                v-for="[attackerId, damageByAttacker] in Object.entries(v.TotalDamageByAttacker).sort((a, b) => b[1] - a[1])"
+                v-bind:key="attackerId" width="100%" class="mb-4 pa-1">
+                <!-- 이름 -->
+                <v-sheet width="100%" @click.stop="showEntityGroupDetailDamageList(v.Id, attackerId)">
+                    {{ entityMap[attackerId]?.Name || attackerId }} {{ damageByAttacker.toFixed(0) }} {{ (100 *
+                        damageByAttacker /
+                        v.TotalDamage).toFixed(1) }}%
+                </v-sheet>
+
+                <!-- 막대 -->
+                <v-sheet width="100%" height="16">
                     <v-sheet @click.stop="showEntityGroupDetailDamageList(v.Id, attackerId)"
                         :color="getMabiNameColor(entityMap[attackerId]?.Name)" height="100%"
-                        :width="`${Math.round(100 * damageByAttacker / v.TotalDamage).toFixed(0)}%`"
-                        class="text-center align-center">
-                        {{ entityMap[attackerId]?.Name || attackerId }} {{ damageByAttacker.toFixed(0) }}
+                        :width="`${Math.round(100 * damageByAttacker / v.TotalDamage).toFixed(0)}%`" class="rounded-xl">
                     </v-sheet>
-                </template>
+                </v-sheet>
             </v-sheet>
         </template>
 
     </v-expansion-panels>
 
-    <v-dialog v-model="detailDialog" min-width="60vw">
+    <v-dialog v-model="detailDialog" min-width="60vw" height="90svh">
         <v-card>
-            <v-card-text>
-                <p>{{ detailDialogData?.attackerName }} -> {{ detailDialogData?.targetName }}</p>
-
-                <v-sheet v-for="v, i in detailDialogData?.Damages" v-bind:key="i">
-                    <p>
-                        <template v-for="cond in v.Conditions" v-bind:key="cond.CCId">
-                            <img width="16" height="16" @mouseover="e => setCondTooltip(e.target! as HTMLElement, cond)"
-                                @mouseleave="e => setCondTooltip(e.target! as HTMLElement, undefined)"
-                                @click="e => setCondTooltip(e.target! as HTMLElement, cond)"
-                                :src='`http://localhost:${__api_port}/res/characterconditionimage/${region}/${cond.CCId}/${cond.CCId}.png`' />
-                        </template>
-                        ->
-                        <template v-for="cond in v.TargetConditions" v-bind:key="cond.CCId">
-                            <img width="16" height="16" @mouseover="e => setCondTooltip(e.target! as HTMLElement, cond)"
-                                @mouseleave="e => setCondTooltip(e.target! as HTMLElement, undefined)"
-                                @click="e => setCondTooltip(e.target! as HTMLElement, cond)"
-                                :src='`http://localhost:${__api_port}/res/characterconditionimage/${region}/${cond.CCId}/${cond.CCId}.png`' />
-                        </template>
-                    </p>
-                    <p>
-                        <img width="32" height="32"
-                            :src='`http://localhost:${__api_port}/res/skillimage/${region}/${v.SkillId}/${v.SkillId}.png`' />
-                        {{ skillNameMap[v.SkillId] }} {{ v.Damage.toFixed(0) }} {{ v.IsCritical ? '크리티컬' : '' }}
-                    </p>
+            <v-card-text class="pa-0">
+                <v-sheet width="100%" class="d-flex pa-2 mb-2">
+                    {{ detailDialogData?.attackerName }} -> {{ detailDialogData?.targetName }}
                 </v-sheet>
+
+                <v-virtual-scroll :items="detailDialogData?.Damages"
+                    style="min-height: 300px; height: calc(90svh - 200px)" item-height="80">
+                    <template v-slot:default="{ item }">
+                        <v-card min-height="80">
+                            <p>
+                                <template v-for="cond in item.Conditions" v-bind:key="cond.CCId">
+                                    <img width="16" height="16"
+                                        @mouseover="e => setCondTooltip(e.target! as HTMLElement, cond)"
+                                        @mouseleave="e => setCondTooltip(e.target! as HTMLElement, undefined)"
+                                        @click="e => setCondTooltip(e.target! as HTMLElement, cond)"
+                                        :src='`http://localhost:${__api_port}/res/characterconditionimage/${region}/${cond.CCId}/${cond.CCId}.png`' />
+                                </template>
+                                ->
+                                <template v-for="cond in item.TargetConditions" v-bind:key="cond.CCId">
+                                    <img width="16" height="16"
+                                        @mouseover="e => setCondTooltip(e.target! as HTMLElement, cond)"
+                                        @mouseleave="e => setCondTooltip(e.target! as HTMLElement, undefined)"
+                                        @click="e => setCondTooltip(e.target! as HTMLElement, cond)"
+                                        :src='`http://localhost:${__api_port}/res/characterconditionimage/${region}/${cond.CCId}/${cond.CCId}.png`' />
+                                </template>
+                            </p>
+                            <p>
+                                <img width="32" height="32"
+                                    :src='`http://localhost:${__api_port}/res/skillimage/${region}/${item.SkillId}/${item.SkillId}.png`' />
+                                {{ skillNameMap[item.SkillId] }} {{ item.Damage.toFixed(0) }} {{ item.IsCritical ?
+                                    '크리티컬' : '' }}
+                            </p>
+                        </v-card>
+                    </template>
+                </v-virtual-scroll>
             </v-card-text>
             <v-card-actions>
                 <v-btn color="primary" block @click="detailDialog = false">Close</v-btn>
