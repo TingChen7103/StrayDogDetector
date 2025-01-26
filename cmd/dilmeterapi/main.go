@@ -10,6 +10,8 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"os/exec"
+	"runtime"
 	"time"
 
 	"gitlab.com/prilus/mabidilmeter/packet"
@@ -106,6 +108,15 @@ func main() {
 			}
 		}
 	})
+
+	if runtime.GOOS == "windows" {
+		// ignore error
+		go exec.Command("explorer", fmt.Sprintf("http://127.0.0.1:%v", port)).Run()
+	}
+
+	for {
+		time.Sleep(1 * time.Second)
+	}
 }
 
 func startWebsocketServer(newClientCb func(*websocket.Conn)) {
@@ -136,13 +147,16 @@ func startWebsocketServer(newClientCb func(*websocket.Conn)) {
 	var staticFS = fs.FS(staticFiles)
 	htmlContent, err := fs.Sub(staticFS, "static")
 	if err != nil {
-		log.Fatal(err)
+		logger.Fatal(err)
 	}
 
 	http.Handle("/", http.FileServer(http.FS(htmlContent)))
 
-	log.Printf("Server listening on port %d", port)
-	log.Fatal(http.ListenAndServe(fmt.Sprintf("127.0.0.1:%d", port), nil))
+	logger.Printf("Server listening on port %d", port)
+
+	go func() {
+		logger.Fatalln(http.ListenAndServe(fmt.Sprintf("127.0.0.1:%d", port), nil))
+	}()
 }
 
 func getNic() string {
