@@ -46,6 +46,7 @@ func main() {
 		FileName: fileName,
 	})
 	if err != nil {
+		messagebox(fmt.Sprintf("NewGameServerPacketReader failed: %v", err))
 		logger.Fatalln("NewGameServerPacketReader failed:", err)
 	}
 
@@ -155,7 +156,11 @@ func startWebsocketServer(newClientCb func(*websocket.Conn)) {
 	logger.Printf("Server listening on port %d", port)
 
 	go func() {
-		logger.Fatalln(http.ListenAndServe(fmt.Sprintf("127.0.0.1:%d", port), nil))
+		err := http.ListenAndServe(fmt.Sprintf("127.0.0.1:%d", port), nil)
+		if err != nil {
+			messagebox(fmt.Sprintf("ListenAndServe failed: %v", err))
+			logger.Fatalln(err)
+		}
 	}()
 }
 
@@ -169,6 +174,7 @@ func getNic() string {
 	// 인자가 없으면 로컬에 모든 nic을 찾는다
 	_nicName, err := pcaputil.FindNic()
 	if err != nil {
+		messagebox(fmt.Sprintf("FindNic failed: %v\nis mabinogi running?", err))
 		logger.Fatalln("FindNic failed:", err)
 	}
 
