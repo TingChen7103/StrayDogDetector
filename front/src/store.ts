@@ -1,5 +1,6 @@
 import { ref, computed } from 'vue';
 import { MabiDB } from '@/mabidb';
+import { ActorManager } from '@/eventActor';
 
 export const loadingCount = ref(0);
 export const isLoading = computed(() => loadingCount.value > 0);
@@ -18,3 +19,9 @@ export const db = computed(() => {
 
     return instance;
 });
+
+export const raceNameMap = ref<Record<number, string>>({});
+export const skillNameMap = ref<Record<number, string>>({});
+export const condNameMap = ref<Record<number, string>>({});
+
+export const actorManager = ref(new ActorManager());

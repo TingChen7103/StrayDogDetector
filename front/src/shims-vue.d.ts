@@ -1,6 +1,7 @@
 import { ComputedRef, Ref } from 'vue';
 
 import { MabiDB } from '@/mabidb';
+import { ActorManager } from '@/eventActor';
 
 declare module '@vue/runtime-core' {
     function inject(key: 'isLoading'): ComputedRef<boolean>;
@@ -8,4 +9,8 @@ declare module '@vue/runtime-core' {
     function inject(key: 'lang'): Ref<string>;
     function inject(key: 'regionList'): Ref<string[]>;
     function inject(key: 'db'): ComputedRef<MabiDB>;
+    function inject(key: 'raceNameMap'): Ref<Record<number, string>>;
+    function inject(key: 'skillNameMap'): Ref<Record<number, string>>;
+    function inject(key: 'condNameMap'): Ref<Record<number, string>>;
+    function inject(key: 'actorManager'): Ref<ActorManager>;
 }
