@@ -1,11 +1,11 @@
 import * as protocols from '@/protocols';
 
-// TODO: entity와 dmanage store 분리하기, entity appear에서 damage store에 있던 정보들 가져오기
 // TODO: take cc, apply cc 구분하기
 
 export class ActorManager {
     public entityMap: Record<string, EntityActor> = {};
     public groupMap: Record<string, GroupActor> = {};
+    public damages: protocols.eventDamage[] = [];
 
     public static pcRaceSet = new Set<number>([8001, 8002, 9001, 9002, 10001, 10002]);
 
@@ -18,12 +18,14 @@ export class ActorManager {
 
         switch (event.EventId) {
             case protocols.eventIdEntityAppear:
+                // TODO: entityAppear에서 master id, hp 가져오기, damage, cc 처리할 때 master id가 있으면 그쪽으로 보내야함
                 entity.onEntityAppear(event as protocols.eventEntityAppear);
                 break;
 
             case protocols.eventIdDamage:
                 {
                     const event_ = event as protocols.eventDamage;
+                    this.damages.push(event_);
 
                     if (entity) {
                         entity.onApplyDamage(event_);
@@ -70,12 +72,29 @@ export class ActorManager {
         const groupKey = ActorManager.groupTargetKey(event);
         const group = this.groupMap[groupKey] ??= new GroupActor(this, groupKey, RaceId, Name);
 
-        this.entityMap[Id] = group.entityMap[Id] ??= new EntityActor(this, Id, RaceId, Name, group);
+        const isNewEntity = !this.entityMap[Id];
 
+        if (isNewEntity) {
+            const entity = new EntityActor(this, Id, RaceId, Name, group);
+            this.entityMap[Id] = group.entityMap[Id] = entity;
+
+            // entity appear를 받은 뒤에 api가 켜진 경우
+            for (const v of this.damages) {
+                if (v.Id == Id) {
+                    entity.onApplyDamage(v);
+                    entity.group.onApplyDamage(v);
+                }
+                else if (v.TargetId == Id) {
+                    entity.onTakeDamage(v);
+                    entity.group.onTakeDamage(v);
+                }
+            }
+        }
     }
 
     public clear() {
         // object instance를 새로 만들면 귀찮아짐
+        this.damages.length = 0;
 
         for (const k in this.entityMap) {
             const v = this.entityMap[k];
@@ -212,6 +231,11 @@ export class EntityActor extends BaseActor {
         return this._totalApplyDamageByTarget;
     }
 
+    private _totalApplyDamageBySkill: Record<number, { count: number, damage: number }> = {};
+    public get totalApplyDamageBySkill() {
+        return this._totalApplyDamageBySkill;
+    }
+
     private _totalTakeDamageByAttacker: Record<string, number> = {};
     public get totalTakeDamageByAttacker() {
         return this._totalTakeDamageByAttacker;
@@ -265,6 +289,10 @@ export class EntityActor extends BaseActor {
 
         this._totalApplyDamageByTarget[targetId] ??= 0;
         this._totalApplyDamageByTarget[targetId] += event.Damage;
+
+        this._totalApplyDamageBySkill[event.SkillId] ??= { count: 0, damage: 0 };
+        this._totalApplyDamageBySkill[event.SkillId].count++;
+        this._totalApplyDamageBySkill[event.SkillId].damage += event.Damage;
 
         this._totalApplyDamage += event.Damage;
         this._applyDamages.push(damage);

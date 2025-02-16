@@ -10,22 +10,30 @@
                 </v-expansion-panel-title>
                 <v-expansion-panel-text class="pa-3">
                     <v-sheet
-                        v-for="[targetId, damageToTarget] in Object.entries(v.totalApplyDamageByTarget).sort((a, b) => b[1] - a[1])"
-                        v-bind:key="targetId" width="100%" class="mb-4">
-                        <!-- 이름 -->
-                        <v-sheet width="100%" @click.stop="showEntityDetailDamageList(v.id, targetId)">
-                            {{ prettyEntityName(entityMap[targetId]) || targetId }} {{
-                                damageToTarget.toFixed(0) }} {{
-                                (100 * damageToTarget / v.totalApplyDamage).toFixed(1) }}%
+                        v-for="[skillId, skillStats] in Object.entries(v.totalApplyDamageBySkill).sort((a, b) => b[1].damage - a[1].damage)"
+                        v-bind:key="skillId" class="d-flex">
+                        <v-sheet width="32" class="mr-2">
+                            <img width="32" height="32" :src='`/res/skillimage/${region}/${skillId}/${skillId}.png`' />
                         </v-sheet>
+                        <v-sheet width="100%" class="mb-4">
+                            <!-- 스킬 이미지 -->
+                            <!-- 이름 -->
+                            <v-sheet width="100%" @click.stop="showEntityDetailDamageList(v.id, +skillId)">
+                                {{ skillNameMap[+skillId] || `unknownSkill:${skillId}` }}
+                                damage: {{ skillStats.damage.toFixed(0) }}
+                                count: {{ skillStats.count }}
+                                avgDamage: {{ (skillStats.damage / skillStats.count).toFixed(0) }}
+                                {{ (100 * skillStats.damage / v.totalApplyDamage).toFixed(1) }}%
+                            </v-sheet>
 
-                        <!-- 막대 -->
-                        <v-sheet width="100%" height="16">
-                            <v-sheet @click.stop="showEntityDetailDamageList(v.id, targetId)"
-                                :color="getMabiNameColor(prettyEntityName(entityMap[targetId]) || targetId)"
-                                height="100%"
-                                :width="`${Math.round(100 * damageToTarget / v.totalApplyDamage).toFixed(0)}%`"
-                                class="rounded-xl">
+                            <!-- 막대 -->
+                            <v-sheet width="100%" height="16">
+                                <v-sheet @click.stop="showEntityDetailDamageList(v.id, +skillId)"
+                                    :color="getMabiNameColor(skillNameMap[+skillId] || `unknownSkill:${skillId}`)"
+                                    height="100%"
+                                    :width="`${Math.round(100 * skillStats.damage / v.totalApplyDamage).toFixed(0)}%`"
+                                    class="rounded-xl">
+                                </v-sheet>
                             </v-sheet>
                         </v-sheet>
                     </v-sheet>
@@ -45,10 +53,10 @@
         <v-card>
             <v-card-text class="pa-0">
                 <v-sheet width="100%" class="d-flex pa-2 mb-2">
-                    {{ detailDialogData?.attackerName }} -> {{ detailDialogData?.targetName }}
+                    {{ detailDialogData?.attackerName }} {{ detailDialogData?.skillName }}
                 </v-sheet>
 
-                <v-virtual-scroll :items="detailDialogData?.Damages"
+                <v-virtual-scroll :items="detailDialogData?.damages"
                     style="min-height: 300px; height: calc(90svh - 200px)" item-height="80">
                     <template v-slot:default="{ item }">
                         <v-card min-height="80">
@@ -77,8 +85,8 @@
                                         </template>
                                     </p>
                                     <p>
-                                        {{ skillNameMap[item.SkillId] }} {{ item.Damage.toFixed(0) }}
-                                        {{ item.IsCritical ? '크리티컬' : '' }}
+                                        {{ prettyEntityName(entityMap[item.TargetId]) }}
+                                        {{ item.Damage.toFixed(0) }} {{ item.IsCritical ? '크리티컬' : '' }}
                                     </p>
                                 </v-sheet>
                             </v-sheet>
@@ -114,7 +122,7 @@ export default defineComponent({
         const entityMap = actorManager.value.entityMap;
         const groupMap = actorManager.value.groupMap;
 
-        const showEntityDetailDamageList = (attackerId: string, targetId: string) => {
+        const showEntityDetailDamageList = (attackerId: string, skillId: number) => {
             const entity = entityMap[attackerId];
             if (!entity) {
                 return;
@@ -122,9 +130,9 @@ export default defineComponent({
 
             detailDialog.value = true;
             detailDialogData.value = {
-                targetName: prettyEntityName(entityMap[targetId]) || targetId,
                 attackerName: prettyEntityName(entity)!,
-                Damages: entity.applyDamages.filter(v => v.TargetId == targetId),
+                skillName: skillNameMap.value[skillId] || `unknownSkill:${skillId}`,
+                damages: entity.applyDamages.filter(v => v.SkillId == skillId),
             };
         }
 
@@ -135,7 +143,7 @@ export default defineComponent({
             pcEntities.value.reduce((acc, v) => acc + v.totalApplyDamage, 0));
 
         const detailDialog = ref(false);
-        const detailDialogData = ref<{ targetName: string; attackerName: string; Damages: EntityDamage[] }>();
+        const detailDialogData = ref<{ attackerName: string; skillName: string; damages: EntityDamage[] }>();
 
         const condTooltipParent = ref<HTMLElement>();
         const condTooltipValue = ref(false);

@@ -32,8 +32,7 @@
     <v-tabs v-model="tab">
         <v-tab value="takeDamage">Take Damage</v-tab>
         <v-tab value="applyDamageByEntity">Apply Damage (By Entity)</v-tab>
-        <!-- @TODO -->
-        <!-- <v-tab value="applyDamageBySkill">Apply Damage (By Skill)</v-tab> -->
+        <v-tab value="applyDamageBySkill">Apply Damage (By Skill)</v-tab>
     </v-tabs>
 
     <v-tabs-window v-model="tab">
@@ -43,6 +42,10 @@
 
         <v-tabs-window-item value="applyDamageByEntity">
             <apply-damage-by-entity />
+        </v-tabs-window-item>
+
+        <v-tabs-window-item value="applyDamageBySkill">
+            <apply-damage-by-skill />
         </v-tabs-window-item>
     </v-tabs-window>
 </template>
@@ -55,12 +58,14 @@ import { eventBase } from "./protocols";
 
 import TakeDamageComponent from '@/components/takeDamage.vue';
 import ApplyDamageByEntityComponent from '@/components/applyDamageByEntity.vue';
+import ApplyDamageBySkillComponent from '@/components/applyDamageBySkill.vue';
 
 export default defineComponent({
     name: "App",
     components: {
         TakeDamage: TakeDamageComponent,
         ApplyDamageByEntity: ApplyDamageByEntityComponent,
+        ApplyDamageBySkill: ApplyDamageBySkillComponent,
     },
     setup() {
         const isLoading = inject('isLoading');
