@@ -78,11 +78,15 @@ export class ActorManager {
         // object instance를 새로 만들면 귀찮아짐
 
         for (const k in this.entityMap) {
-            delete this.entityMap[k];
+            const v = this.entityMap[k];
+            
+            v.clear();
         }
 
         for (const k in this.groupMap) {
-            delete this.groupMap[k];
+            const v = this.groupMap[k];
+
+            v.clear();
         }
     }
 
@@ -97,6 +101,8 @@ export class ActorManager {
 }
 
 interface IEventActor {
+    /** damage 쪽 수치들만 reset */
+    clear(): void;
 }
 
 export abstract class BaseActor implements IEventActor {
@@ -116,22 +122,22 @@ export abstract class BaseActor implements IEventActor {
         return this._name;
     }
 
-    // 받은 대미지
-    protected _totalTakeDamage = 0;
+    /** 받은 대미지 */
     public get totalTakeDamage() {
         return this._totalTakeDamage;
     }
+    protected _totalTakeDamage = 0;
 
     protected _takeDamages: EntityDamage[] = [];
     public get takeDamages() {
         return this._takeDamages;
     }
 
-    // 준 대미지
-    protected _totalApplyDamage = 0;
+    /** 준 대미지 */
     public get totalApplyDamage() {
         return this._totalApplyDamage;
     }
+    protected _totalApplyDamage = 0;
 
     protected _applyDamages: EntityDamage[] = [];
     public get applyDamages() {
@@ -171,6 +177,14 @@ export abstract class BaseActor implements IEventActor {
     public onFinish(event: protocols.eventFinish): void {
         // nothing
         event;
+    }
+
+    public clear() {
+        this._totalTakeDamage = 0;
+        this._takeDamages.length = 0;
+
+        this._totalApplyDamage = 0;
+        this._applyDamages.length = 0;
     }
 }
 
@@ -272,8 +286,16 @@ export class EntityActor extends BaseActor {
     public override onFinish(event: protocols.eventFinish): void {
         this._finisherId = event.AttackerId;
     }
+
+    public override clear() {
+        super.clear();
+
+        this._totalApplyDamageByTarget = {};
+        this._totalTakeDamageByAttacker = {};
+    }
 }
 
+// TODO: GroupActor에 Group 조건 추가하는 식으로 바꾸는게 좋을듯
 export class GroupActor extends BaseActor {
     public constructor(mgr: ActorManager, id: string, raceId: number) {
         const groupName = `${raceId}`;
@@ -335,6 +357,12 @@ export class GroupActor extends BaseActor {
 
         this._totalTakeDamageByAttacker[event.Id] ??= 0;
         this._totalTakeDamageByAttacker[event.Id] += event.Damage;
+    }
+
+    public override clear(): void {
+        super.clear();
+
+        this._totalTakeDamageByAttacker = {};
     }
 }
 
