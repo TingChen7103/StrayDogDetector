@@ -28,6 +28,4 @@ func messagebox(msg string) {
 	)
 
 	_ = ret
-
-	return
 }
