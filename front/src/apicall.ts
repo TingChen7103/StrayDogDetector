@@ -3,7 +3,7 @@ import brotliPromise from 'brotli-dec-wasm';
 
 import { ResourceData, ResourceVersion } from '@/protos/resourcedata';
 
-export const resUrl = ref(`http://localhost:${__api_port}/res/`);
+export const resUrl = ref(`/res/`);
 
 let loadingCount: Ref<number>;
 

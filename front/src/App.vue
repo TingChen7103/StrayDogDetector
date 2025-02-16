@@ -9,9 +9,10 @@
 
             </span>
             <v-divider />
-            <v-btn @click="test" :loading="isLoading" color="primary" size="small">test</v-btn>
+            <v-btn @click="download" :loading="isLoading" color="primary" size="small"
+                prepend-icon="mdi-download" class="ml-1">Download</v-btn>
             <v-btn @click="clearData" :loading="isLoading" color="primary" size="small"
-                prepend-icon="mdi-close">Clear</v-btn></v-sheet>
+                prepend-icon="mdi-close" class="ml-1 mr-4">Clear</v-btn></v-sheet>
     </v-sheet>
 
     <v-tabs v-model="tab">
@@ -58,7 +59,7 @@ export default defineComponent({
         const actorManager = inject('actorManager');
 
         const socketConnected = ref(false);
-        const socket = new SocketClient(`ws://localhost:${__api_port}/ws`);
+        const socket = new SocketClient(`/ws`);
         socket.onConnect = isConnected => socketConnected.value = isConnected;
         socket.onEvent = (event) => actorManager.value.onEvent(event);
 
@@ -66,8 +67,8 @@ export default defineComponent({
             actorManager.value.clear();
         }
 
-        const test = () => {
-            console.log(actorManager.value);
+        const download = () => {
+            window.open('/api/packet_log', '_blank');
         }
 
         const tab = ref('');
@@ -105,13 +106,12 @@ export default defineComponent({
         });
 
         return {
-            __api_port,
             isLoading,
             region,
 
             socketConnected,
             clearData,
-            test,
+            download,
 
             tab,
         }

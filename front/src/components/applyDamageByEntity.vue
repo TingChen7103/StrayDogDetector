@@ -58,7 +58,7 @@
                                         @mouseover="e => setCondTooltip(e.target! as HTMLElement, cond)"
                                         @mouseleave="e => setCondTooltip(e.target! as HTMLElement, undefined)"
                                         @click="e => setCondTooltip(e.target! as HTMLElement, cond)"
-                                        :src='`http://localhost:${__api_port}/res/characterconditionimage/${region}/${cond.CCId}/${cond.CCId}.png`' />
+                                        :src='`/res/characterconditionimage/${region}/${cond.CCId}/${cond.CCId}.png`' />
                                 </template>
                                 ->
                                 <template v-for="cond in item.TargetConditions" v-bind:key="cond.CCId">
@@ -66,12 +66,12 @@
                                         @mouseover="e => setCondTooltip(e.target! as HTMLElement, cond)"
                                         @mouseleave="e => setCondTooltip(e.target! as HTMLElement, undefined)"
                                         @click="e => setCondTooltip(e.target! as HTMLElement, cond)"
-                                        :src='`http://localhost:${__api_port}/res/characterconditionimage/${region}/${cond.CCId}/${cond.CCId}.png`' />
+                                        :src='`/res/characterconditionimage/${region}/${cond.CCId}/${cond.CCId}.png`' />
                                 </template>
                             </p>
                             <p>
                                 <img width="32" height="32"
-                                    :src='`http://localhost:${__api_port}/res/skillimage/${region}/${item.SkillId}/${item.SkillId}.png`' />
+                                    :src='`/res/skillimage/${region}/${item.SkillId}/${item.SkillId}.png`' />
                                 {{ skillNameMap[item.SkillId] }} {{ item.Damage.toFixed(0) }} {{ item.IsCritical ?
                                     '크리티컬' : '' }}
                             </p>
@@ -164,7 +164,6 @@ export default defineComponent({
         }
 
         return {
-            __api_port,
             isLoading,
             region,
 

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"log"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/gopacket/gopacket/pcap"
+	"gitlab.com/prilus/mabidilmeter/constants"
 	"gitlab.com/prilus/mabidilmeter/packet"
 	"gitlab.com/prilus/mabidilmeter/pcaputil"
 	"golang.org/x/net/websocket"
@@ -27,6 +29,7 @@ const port = 8030
 var staticFiles embed.FS
 
 var logger = log.New(os.Stdout, "dilmeterapi ", log.LstdFlags|log.Lshortfile)
+var packetLogFilename = ""
 
 func main() {
 	// main ctx
@@ -118,6 +121,18 @@ func run(ctx context.Context, nicName string, fileName string) {
 
 	pub := newEventPublisher(ctx, r)
 
+	// packet writer (for debug)
+	go func() {
+		ch := make(chan iEvent, 10000)
+		defer close(ch)
+
+		pub.addClient(ctx, ch)
+		if err := startPacketWriter(ctx, ch); err != nil {
+			logger.Println("startPacketWriter failed:", err)
+			return
+		}
+	}()
+
 	startWebsocketServer(func(ws *websocket.Conn) {
 		logger.Printf("Client connected from %s", ws.RemoteAddr())
 		wsCtx, wsCtxCancel := context.WithCancel(ws.Request().Context())
@@ -205,6 +220,7 @@ func startWebsocketServer(newClientCb func(*websocket.Conn)) {
 	}
 
 	http.Handle("/ws", websocket.Handler(newClientCb))
+	http.HandleFunc("/api/packet_log", httpHandlerPacketLog)
 	http.HandleFunc("/res/", handler(proxy))
 
 	var staticFS = fs.FS(staticFiles)
@@ -226,4 +242,47 @@ func startWebsocketServer(newClientCb func(*websocket.Conn)) {
 	}()
 
 	<-time.After(1 * time.Second)
+}
+
+func startPacketWriter(ctx context.Context, ch <-chan iEvent) error {
+	packetLogFilename = fmt.Sprintf("packet_log_%v.ndjson", constants.SERVER_START_AT)
+
+	fd, err := os.OpenFile(packetLogFilename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	if err != nil {
+		logger.Println("packetWriter open file failed:", err)
+		return err
+	}
+	defer fd.Close()
+
+	flushTicker := time.NewTicker(5 * time.Second)
+	defer flushTicker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+
+		case e := <-ch:
+			b, err := json.Marshal(e)
+			if err != nil {
+				// ?
+				continue
+			}
+
+			b = append(b, '\n')
+
+			_, err = fd.Write(b)
+			if err != nil {
+				logger.Println("packetWriter write failed:", err)
+				return err
+			}
+
+		case <-flushTicker.C:
+			err := fd.Sync()
+			if err != nil {
+				// ignore
+				_ = 1
+			}
+		}
+	}
 }

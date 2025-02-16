@@ -3,6 +3,7 @@ package constants
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 var PCAP_GAMESERVER_FILTER = ""
@@ -18,3 +19,5 @@ func init() {
 
 	PCAP_GAMESERVER_FILTER = filter
 }
+
+var SERVER_START_AT = time.Now().Unix()

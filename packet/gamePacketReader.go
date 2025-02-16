@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/layers"
 	"github.com/gopacket/gopacket/pcap"
+	"github.com/gopacket/gopacket/pcapgo"
 	"gitlab.com/prilus/mabidilmeter/constants"
 	"gitlab.com/prilus/mabidilmeter/util"
 )
@@ -25,6 +27,9 @@ type GameServerPacketReader struct {
 	// mutable
 	handle *pcap.Handle
 	fd     *os.File
+
+	logHandle *pcapgo.NgWriter
+	logFd     *os.File
 }
 
 type GameServerPacketReaderOpt struct {
@@ -57,6 +62,11 @@ func NewGameServerPacketReader(opt *GameServerPacketReaderOpt) (*GameServerPacke
 	v := &GameServerPacketReader{
 		ctx:      opt.Ctx,
 		packetCh: make(chan *GamePacket, packetQueueSize),
+	}
+
+	if err := v.openLog(); err != nil {
+		logger.Println("openLog failed", err)
+		return nil, err
 	}
 
 	payloadCh := (<-chan []byte)(nil)
@@ -171,6 +181,27 @@ func (t *GameServerPacketReader) openFile(file string, filter string) (<-chan []
 	return ch, nil
 }
 
+func (t *GameServerPacketReader) openLog() error {
+	fileName := fmt.Sprintf("packet_capture_%v.pcapng", constants.SERVER_START_AT)
+	fd, err := os.OpenFile(fileName, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	if err != nil {
+		logger.Println(err)
+		return err
+	}
+
+	t.logFd = fd
+
+	handle, err := pcapgo.NewNgWriter(fd, layers.LinkTypeEthernet)
+	if err != nil {
+		logger.Println(err)
+		return err
+	}
+
+	t.logHandle = handle
+
+	return nil
+}
+
 func (t *GameServerPacketReader) readPacketLoop(ch chan<- []byte) {
 	ethLayer := layers.Ethernet{}
 	ip4Layer := layers.IPv4{}
@@ -191,7 +222,10 @@ func (t *GameServerPacketReader) readPacketLoop(ch chan<- []byte) {
 			break
 		}
 
-		_ = ci
+		if t.logHandle != nil {
+			// ignore error
+			_ = t.logHandle.WritePacket(ci, b)
+		}
 
 		if err := layerParser.DecodeLayers(b, &packetLayers); err != nil {
 			logger.Println(err)
@@ -312,6 +346,16 @@ func (t *GameServerPacketReader) Close() {
 	if t.fd != nil {
 		t.fd.Close()
 		t.fd = nil
+	}
+
+	if t.logHandle != nil {
+		t.logHandle.Flush()
+		t.logHandle = nil
+	}
+
+	if t.logFd != nil {
+		t.logFd.Close()
+		t.logFd = nil
 	}
 }
 
