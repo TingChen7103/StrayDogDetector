@@ -1,6 +1,8 @@
 ## dilmatulgi
 
-/ˌdɪl.mɑːˈtʌl.ɡi/ mabinogi damage meter (for testing)
+/ˌdɪl.mɑːˈtʌl.ɡi/ mabinogi damage meter (for testing)  
+
+work with korea region client (packet encryption issue)  
 
 ### prerequire
 
