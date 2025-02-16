@@ -12,8 +12,10 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 
+	"github.com/gopacket/gopacket/pcap"
 	"gitlab.com/prilus/mabidilmeter/packet"
 	"gitlab.com/prilus/mabidilmeter/pcaputil"
 	"golang.org/x/net/websocket"
@@ -31,15 +33,79 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	nicName := getNic()
-	fileName := ""
-	if nicName == "file" {
-		nicName = ""
+	mode := ""
+	if len(os.Args) > 1 {
+		mode = os.Args[1]
+	}
+
+	logger.Println("* dilmatulgi", mode)
+
+	switch mode {
+	case "list":
+		// nic list 출력
+		nics, err := pcap.FindAllDevs()
+		if err != nil {
+			messagebox(fmt.Sprintf("FindAllDevs failed: %v", err))
+			logger.Fatalln("FindAllDevs failed:", err)
+		}
+
+		sb := strings.Builder{}
+
+		for i, nic := range nics {
+			ipStr := "unknownAddress"
+			if len(nic.Addresses) > 0 {
+				ipStr = nic.Addresses[0].IP.String()
+			}
+
+			sb.WriteString(fmt.Sprintln("* nic", i, "name:", nic.Name, "ip:", ipStr))
+		}
+
+		s := sb.String()
+		messagebox(s)
+		logger.Println(s)
+		return
+
+	case "file":
+		fileName := ""
+
 		if len(os.Args) > 2 {
 			fileName = os.Args[2]
 		}
+
+		run(ctx, "", fileName)
+
+	case "":
+		logger.Println("find nic...")
+
+		nicName, err := pcaputil.FindNic()
+		if err != nil {
+			messagebox(fmt.Sprintf("%v\nis mabinogi running?", err))
+			logger.Fatalln("FindNic failed:", err)
+		}
+
+		run(ctx, nicName, "")
+
+	default:
+		_, err := os.Stat(mode)
+		fileExists := err == nil
+
+		nicName, fileName := "", ""
+
+		if fileExists {
+			fileName = mode
+		} else {
+			nicName = mode
+		}
+
+		run(ctx, nicName, fileName)
 	}
 
+	for {
+		time.Sleep(1 * time.Second)
+	}
+}
+
+func run(ctx context.Context, nicName string, fileName string) {
 	r, err := packet.NewGameServerPacketReader(&packet.GameServerPacketReaderOpt{
 		Ctx:      ctx,
 		NicName:  nicName,
@@ -114,10 +180,6 @@ func main() {
 		// ignore error
 		go exec.Command("explorer", fmt.Sprintf("http://127.0.0.1:%v", port)).Run()
 	}
-
-	for {
-		time.Sleep(1 * time.Second)
-	}
 }
 
 func startWebsocketServer(newClientCb func(*websocket.Conn)) {
@@ -162,21 +224,6 @@ func startWebsocketServer(newClientCb func(*websocket.Conn)) {
 			logger.Fatalln(err)
 		}
 	}()
-}
 
-func getNic() string {
-	// 인자가 있으면 nic name으로 사용
-	if len(os.Args) > 1 {
-		nicName := os.Args[1]
-		return nicName
-	}
-
-	// 인자가 없으면 로컬에 모든 nic을 찾는다
-	_nicName, err := pcaputil.FindNic()
-	if err != nil {
-		messagebox(fmt.Sprintf("FindNic failed: %v\nis mabinogi running?", err))
-		logger.Fatalln("FindNic failed:", err)
-	}
-
-	return _nicName
+	<-time.After(1 * time.Second)
 }

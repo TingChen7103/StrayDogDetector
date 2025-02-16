@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"os"
 	"time"
 
 	"github.com/gopacket/gopacket"
@@ -23,6 +24,7 @@ type GameServerPacketReader struct {
 
 	// mutable
 	handle *pcap.Handle
+	fd     *os.File
 }
 
 type GameServerPacketReaderOpt struct {
@@ -132,7 +134,21 @@ func (t *GameServerPacketReader) openNic(nic string, filter string) (<-chan []by
 }
 
 func (t *GameServerPacketReader) openFile(file string, filter string) (<-chan []byte, error) {
-	handle, err := pcap.OpenOffline(file)
+	fd, err := os.OpenFile(file, os.O_RDONLY, 0644)
+	if err != nil {
+		logger.Println(err)
+		return nil, err
+	}
+
+	t.fd = fd
+
+	/*
+		OpenOffline으로 함수를 호출 할 때 fileName을 utf8로 넘기는데,
+		libpcap에서는 multibyte용 fopen으로 파일을 연다 -> 한글 경로일 때 깨짐
+
+		libpcap에서 pcap_init(PCAP_CHAR_ENC_UTF_8) 호출하는게 나을 수 도
+	*/
+	handle, err := pcap.OpenOfflineFile(fd)
 	if err != nil {
 		logger.Println(err)
 		return nil, err
@@ -291,6 +307,11 @@ func (t *GameServerPacketReader) Close() {
 	if t.handle != nil {
 		t.handle.Close()
 		t.handle = nil
+	}
+
+	if t.fd != nil {
+		t.fd.Close()
+		t.fd = nil
 	}
 }
 
