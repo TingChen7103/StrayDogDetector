@@ -68,7 +68,7 @@ export class ActorManager {
         const { Id, RaceId, Name } = event;
 
         const groupKey = ActorManager.groupTargetKey(event);
-        const group = this.groupMap[groupKey] ??= new GroupActor(this, groupKey, RaceId);
+        const group = this.groupMap[groupKey] ??= new GroupActor(this, groupKey, RaceId, Name);
 
         this.entityMap[Id] = group.entityMap[Id] ??= new EntityActor(this, Id, RaceId, Name, group);
 
@@ -79,7 +79,7 @@ export class ActorManager {
 
         for (const k in this.entityMap) {
             const v = this.entityMap[k];
-            
+
             v.clear();
         }
 
@@ -106,7 +106,7 @@ interface IEventActor {
 }
 
 export abstract class BaseActor implements IEventActor {
-    protected constructor(protected mgr: ActorManager, private _id: string, private _raceId: number, private _name: string) {
+    protected constructor(protected mgr: ActorManager, private _id: string, private _raceId: number, protected _name: string) {
         this._isPC = ActorManager.pcRaceSet.has(_raceId);
     }
 
@@ -297,8 +297,10 @@ export class EntityActor extends BaseActor {
 
 // TODO: GroupActor에 Group 조건 추가하는 식으로 바꾸는게 좋을듯
 export class GroupActor extends BaseActor {
-    public constructor(mgr: ActorManager, id: string, raceId: number) {
-        const groupName = `${raceId}`;
+    public constructor(mgr: ActorManager, id: string, raceId: number, name: string) {
+        const groupName = ActorManager.pcRaceSet.has(raceId)
+            ? name : `${raceId}`;
+
         super(mgr, id, raceId, groupName);
     }
 

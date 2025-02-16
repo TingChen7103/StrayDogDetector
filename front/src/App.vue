@@ -9,10 +9,24 @@
 
             </span>
             <v-divider />
-            <v-btn @click="download" :loading="isLoading" color="primary" size="small"
-                prepend-icon="mdi-download" class="ml-1">Download</v-btn>
-            <v-btn @click="clearData" :loading="isLoading" color="primary" size="small"
-                prepend-icon="mdi-close" class="ml-1 mr-4">Clear</v-btn></v-sheet>
+            <v-tooltip>
+                <template v-slot:activator="{ props }">
+                    <v-btn @click="loadFromFile" v-bind="props" :loading="isLoading" color="primary" size="small"
+                        prepend-icon="mdi-upload" class="ml-1">Load</v-btn>
+                </template>
+                파일에서 데이터를 로드합니다
+            </v-tooltip>
+            <v-btn @click="download" :loading="isLoading" color="primary" size="small" prepend-icon="mdi-download"
+                class="ml-1">Download</v-btn>
+            <v-tooltip>
+                <template v-slot:activator="{ props }">
+                    <v-btn @click="loadFromServer" v-bind="props" :loading="isLoading" color="primary" size="small"
+                        prepend-icon="mdi-refresh" class="ml-1">Reload</v-btn>
+                </template>
+                서버에서 데이터를 다시 로드합니다
+            </v-tooltip>
+            <v-btn @click="clearData" :loading="isLoading" color="primary" size="small" prepend-icon="mdi-close"
+                class="ml-1 mr-4">Clear</v-btn></v-sheet>
     </v-sheet>
 
     <v-tabs v-model="tab">
@@ -37,6 +51,7 @@
 import { defineComponent, onMounted, inject, ref, reactive } from "vue";
 
 import { SocketClient } from '@/socketClient';
+import { eventBase } from "./protocols";
 
 import TakeDamageComponent from '@/components/takeDamage.vue';
 import ApplyDamageByEntityComponent from '@/components/applyDamageByEntity.vue';
@@ -63,12 +78,130 @@ export default defineComponent({
         socket.onConnect = isConnected => socketConnected.value = isConnected;
         socket.onEvent = (event) => actorManager.value.onEvent(event);
 
+        const loadJsonData = (jsonStr: string) => {
+            let lastPos = 0;
+            let count = 0;
+
+            while (lastPos < jsonStr.length) {
+                const nextPos = jsonStr.indexOf('\n', lastPos);
+                if (nextPos < 0) {
+                    break;
+                }
+
+                const line = jsonStr.substring(lastPos, nextPos).trim();
+                lastPos = nextPos + 1;
+                count++;
+
+                if (!line) {
+                    continue;
+                }
+
+                try {
+                    const event = JSON.parse(line);
+                    actorManager.value.onEvent(event);
+                }
+                catch (e) {
+                    console.error(e);
+                    continue;
+                }
+            }
+
+            console.log(`loaded ${count} events`);
+        }
+
         const clearData = () => {
+            // clear했을 때 서버도 같이 clear하는게 맞을지?
             actorManager.value.clear();
         }
 
         const download = () => {
             window.open('/api/packet_log', '_blank');
+        }
+
+        const loadFromFile = async () => {
+            const input = document.createElement('input');
+
+            try {
+                input.type = 'file';
+                input.accept = '.ndjson';
+                input.click();
+
+                await new Promise<void>(resolve => {
+                    input.addEventListener('cancel', () => {
+                        console.log('file select cancel');
+                        resolve();
+                    });
+                    input.addEventListener('change', () => {
+                        console.log('file selected');
+                        resolve();
+                    });
+                })
+
+                if (!input.files?.length) {
+                    // ?
+                    return;
+                }
+
+                const file = input.files[0];
+                const r = new FileReader();
+
+                // 파일이 커지면 chunk로 읽는 것도 고려해야함
+                r.readAsText(file);
+
+
+                await new Promise<void>(resolve => {
+                    r.addEventListener('abort', () => {
+                        console.log('file read abort');
+                        resolve();
+                    });
+                    r.addEventListener('error', () => {
+                        console.log('file read error', r.error);
+                        resolve();
+                    });
+                    r.addEventListener('load', () => {
+                        console.log('file read complete');
+                        resolve();
+                    });
+                });
+
+                const jsonData = r.result as string || '';
+
+                clearData();
+                loadJsonData(jsonData);
+            }
+            finally {
+                input.remove();
+            }
+        }
+
+        const loadFromServer = async () => {
+            const prevHandler = socket.onEvent;
+            const temporaryStore = [] as eventBase[];
+
+            try {
+                const res = await fetch('/api/packet_log');
+                if (!res.ok) {
+                    throw new Error(`failed to fetch data ${res.status}`);
+                }
+
+                socket.onEvent = (e) => temporaryStore.push(e);
+                const jsonData = await res.text();
+
+                clearData();
+                loadJsonData(jsonData);
+            }
+            catch (e) {
+                console.error(e);
+                alert(`failed to load data ${e}`);
+            }
+            finally {
+                socket.onEvent = prevHandler;
+
+                for (const e of temporaryStore) {
+                    actorManager.value.onEvent(e);
+                }
+                temporaryStore.length = 0;
+            }
         }
 
         const tab = ref('');
@@ -112,6 +245,8 @@ export default defineComponent({
             socketConnected,
             clearData,
             download,
+            loadFromFile,
+            loadFromServer,
 
             tab,
         }
