@@ -2,6 +2,7 @@ import { ComputedRef, Ref } from 'vue';
 
 import { MabiDB } from '@/mabidb';
 import { ActorManager } from '@/eventActor';
+import { DamageCollectorManager } from '@/actionCollector';
 
 declare module '@vue/runtime-core' {
     function inject(key: 'isLoading'): ComputedRef<boolean>;
@@ -13,4 +14,5 @@ declare module '@vue/runtime-core' {
     function inject(key: 'skillNameMap'): Ref<Record<number, string>>;
     function inject(key: 'condNameMap'): Ref<Record<number, string>>;
     function inject(key: 'actorManager'): Ref<ActorManager>;
+    function inject(key: 'dcManager'): Ref<DamageCollectorManager>;
 }

@@ -1,10 +1,17 @@
+import { reactive } from 'vue';
+import * as bounds from 'binary-search-bounds';
+
 import * as protocols from '@/protocols';
+import { DamageCollectorManager } from '@/actionCollector';
 
 // TODO: take cc, apply cc 구분하기
 
 export class ActorManager {
-    public entityMap: Record<string, EntityActor> = {};
-    public groupMap: Record<string, GroupActor> = {};
+    constructor(private _damageCollector: DamageCollectorManager) {
+    }
+
+    public entityMap: Record<string, EntityActor> = reactive({});
+    public groupMap: Record<string, GroupActor> = reactive({});
     public damages: protocols.eventDamage[] = [];
 
     public static pcRaceSet = new Set<number>([8001, 8002, 9001, 9002, 10001, 10002]);
@@ -90,6 +97,10 @@ export class ActorManager {
                 }
             }
         }
+    }
+
+    public onEntityDamage(event: EntityDamage) {
+        this._damageCollector.onDamage(event);
     }
 
     public clear() {
@@ -221,24 +232,11 @@ export class EntityActor extends BaseActor {
         return this._conditionMap;
     }
 
+    protected _conditionHistory: EntityConditionState[] = [];
+
     private _finisherId = '';
     public get finisherId() {
         return this._finisherId;
-    }
-
-    private _totalApplyDamageByTarget: Record<string, number> = {};
-    public get totalApplyDamageByTarget() {
-        return this._totalApplyDamageByTarget;
-    }
-
-    private _totalApplyDamageBySkill: Record<number, { count: number, damage: number }> = {};
-    public get totalApplyDamageBySkill() {
-        return this._totalApplyDamageBySkill;
-    }
-
-    private _totalTakeDamageByAttacker: Record<string, number> = {};
-    public get totalTakeDamageByAttacker() {
-        return this._totalTakeDamageByAttacker;
     }
 
     public override onEntityAppear(event: protocols.eventEntityAppear): void {
@@ -259,16 +257,12 @@ export class EntityActor extends BaseActor {
         const damage: EntityDamage = {
             ...event,
 
-            // copy
-            Conditions: attacker ? Object.values(attacker.conditionMap) : [],
-            TargetConditions: Object.values(this._conditionMap),
+            Conditions: attacker?.getConditionState(event.At) ?? [],
+            TargetConditions: this.getConditionState(event.At),
         }
 
         this._totalTakeDamage += event.Damage;
         this._takeDamages.push(damage);
-
-        this._totalTakeDamageByAttacker[event.Id] ??= 0;
-        this._totalTakeDamageByAttacker[event.Id] += event.Damage;
     }
 
     public override onApplyDamage(event: protocols.eventDamage): void {
@@ -282,44 +276,68 @@ export class EntityActor extends BaseActor {
         const damage: EntityDamage = {
             ...event,
 
-            // copy
-            Conditions: Object.values(this._conditionMap),
-            TargetConditions: Object.values(target.conditionMap),
+            Conditions: this.getConditionState(event.At),
+            TargetConditions: target.getConditionState(event.At),
         }
-
-        this._totalApplyDamageByTarget[targetId] ??= 0;
-        this._totalApplyDamageByTarget[targetId] += event.Damage;
-
-        this._totalApplyDamageBySkill[event.SkillId] ??= { count: 0, damage: 0 };
-        this._totalApplyDamageBySkill[event.SkillId].count++;
-        this._totalApplyDamageBySkill[event.SkillId].damage += event.Damage;
 
         this._totalApplyDamage += event.Damage;
         this._applyDamages.push(damage);
+
+        // apply에서만 호출
+        this.mgr.onEntityDamage(damage);
     }
 
     public override onCharacterConditionEnable(event: protocols.eventCharacterConditionEnable): void {
         this._conditionMap[event.CCId] = {
             Id: event.Id,
+            At: event.At,
             CCId: event.CCId,
             DisableAt: event.DisableAt,
             AttackerId: event.AttackerId,
         };
+
+        const prev = this._conditionHistory.length ? this._conditionHistory[this._conditionHistory.length - 1].List : [];
+        const current = Object.values(this._conditionMap).sort((a, b) => a.CCId - b.CCId);
+
+        const needUpdate = prev.length !== current.length || !prev.every((v, i) => v.CCId === current[i].CCId);
+        if (needUpdate) {
+            this._conditionHistory.push({
+                At: event.At,
+                List: current,
+            });
+        }
     }
 
     public override onCharacterConditionDisable(event: protocols.eventCharacterConditionDisable): void {
         delete this._conditionMap[event.CCId];
+
+        const prev = this._conditionHistory.length ? this._conditionHistory[this._conditionHistory.length - 1].List : [];
+        const current = Object.values(this._conditionMap).sort((a, b) => a.CCId - b.CCId);
+
+        const needUpdate = prev.length !== current.length || !prev.every((v, i) => v.CCId === current[i].CCId);
+        if (needUpdate) {
+            this._conditionHistory.push({
+                At: event.At,
+                List: current,
+            });
+        }
     }
 
     public override onFinish(event: protocols.eventFinish): void {
         this._finisherId = event.AttackerId;
     }
 
+    public getConditionState(at: number): EntityCondition[] {
+        const idx = bounds.le<{ At: number }>(this._conditionHistory, { At: at }, (a, b) => a.At - b.At);
+        if (idx < 0) {
+            return [];
+        }
+
+        return this._conditionHistory[idx].List;
+    }
+
     public override clear() {
         super.clear();
-
-        this._totalApplyDamageByTarget = {};
-        this._totalTakeDamageByAttacker = {};
     }
 }
 
@@ -332,14 +350,9 @@ export class GroupActor extends BaseActor {
         super(mgr, id, raceId, groupName);
     }
 
-    private _entityMap: Record<string, EntityActor> = {};
+    private _entityMap: Record<string, EntityActor> = reactive({});
     public get entityMap() {
         return this._entityMap;
-    }
-
-    private _totalTakeDamageByAttacker: Record<string, number> = {};
-    public get totalTakeDamageByAttacker() {
-        return this._totalTakeDamageByAttacker;
     }
 
     public override onEntityAppear(event: protocols.eventEntityAppear): void {
@@ -356,12 +369,6 @@ export class GroupActor extends BaseActor {
 
         this._takeDamages = this._takeDamages.filter(v => v.Id !== event.Id);
         this._totalTakeDamage = this._takeDamages.reduce((acc, v) => acc + v.Damage, 0);
-
-        this._totalTakeDamageByAttacker = {};
-        for (const v of this._takeDamages) {
-            this._totalTakeDamageByAttacker[v.Id] ??= 0;
-            this._totalTakeDamageByAttacker[v.Id] += v.Damage;
-        }
     }
 
     public override onTakeDamage(event: protocols.eventDamage): void {
@@ -377,27 +384,22 @@ export class GroupActor extends BaseActor {
         const damage: EntityDamage = {
             ...event,
 
-            // copy
-            Conditions: attacker ? Object.values(attacker.conditionMap) : [],
-            TargetConditions: Object.values(target.conditionMap),
+            Conditions: attacker?.getConditionState(event.At) ?? [],
+            TargetConditions: target.getConditionState(event.At),
         }
 
         this._totalTakeDamage += event.Damage;
         this._takeDamages.push(damage);
-
-        this._totalTakeDamageByAttacker[event.Id] ??= 0;
-        this._totalTakeDamageByAttacker[event.Id] += event.Damage;
     }
 
     public override clear(): void {
         super.clear();
-
-        this._totalTakeDamageByAttacker = {};
     }
 }
 
 export type EntityDamage = {
     Id: string;
+    At: number;
     TargetId: string;
     SkillId: number;
     Damage: number;
@@ -408,7 +410,13 @@ export type EntityDamage = {
 
 export type EntityCondition = {
     Id: string;
+    At: number;
     CCId: number;
     DisableAt: number;
     AttackerId: string;
+}
+
+type EntityConditionState = {
+    At: number;
+    List: EntityCondition[];
 }

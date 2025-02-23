@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "@protobuf-ts/runtime": "~2.9.4",
+    "binary-search-bounds": "^2.0.5",
     "brotli-dec-wasm": "^2.3.0",
     "vue": "~3.4.31",
     "vuetify": "~3.7.4"

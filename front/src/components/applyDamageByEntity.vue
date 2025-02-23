@@ -1,30 +1,31 @@
 <template>
-    <v-expansion-panels multiple v-for="v in pcEntities" v-bind:key="v.id">
-        <template v-if="v.totalApplyDamage > 0">
+    <v-expansion-panels multiple v-for="v in pcEntities" v-bind:key="v.actor.id">
+        <template v-if="v.dc.totalDamage > 0">
             <v-expansion-panel>
                 <v-expansion-panel-title>
                     <v-sheet>
-                        {{ prettyEntityName(v) }} {{ v.totalApplyDamage.toFixed(0) }}
+                        {{ prettyEntityName(v.actor) }} {{ v.dc.totalDamage.toFixed(0) }} {{ (100 * v.dc.totalDamage /
+                        allApplyDamage).toFixed(1) }}%
                     </v-sheet>
 
                 </v-expansion-panel-title>
                 <v-expansion-panel-text class="pa-3">
                     <v-sheet
-                        v-for="[targetId, damageToTarget] in Object.entries(v.totalApplyDamageByTarget).sort((a, b) => b[1] - a[1])"
+                        v-for="[targetId, damageToTarget] in Object.entries(v.dc.groupedTotalDamages).sort(([, av], [, bv]) => bv - av)"
                         v-bind:key="targetId" width="100%" class="mb-4">
                         <!-- 이름 -->
-                        <v-sheet width="100%" @click.stop="showEntityDetailDamageList(v.id, targetId)">
-                            {{ prettyEntityName(entityMap[targetId]) || targetId }} {{
+                        <v-sheet width="100%" @click.stop="showEntityDetailDamageList(v.actor.id, targetId)">
+                            {{ prettyEntityName(entityMap[targetId]?.actor) || targetId }} {{
                                 damageToTarget.toFixed(0) }} {{
-                                (100 * damageToTarget / v.totalApplyDamage).toFixed(1) }}%
+                                (100 * damageToTarget / v.dc.totalDamage).toFixed(1) }}%
                         </v-sheet>
 
                         <!-- 막대 -->
                         <v-sheet width="100%" height="16">
-                            <v-sheet @click.stop="showEntityDetailDamageList(v.id, targetId)"
-                                :color="getMabiNameColor(prettyEntityName(entityMap[targetId]) || targetId)"
+                            <v-sheet @click.stop="showEntityDetailDamageList(v.actor.id, targetId)"
+                                :color="getMabiNameColor(prettyEntityName(entityMap[targetId]?.actor) || targetId)"
                                 height="100%"
-                                :width="`${Math.round(100 * damageToTarget / v.totalApplyDamage).toFixed(0)}%`"
+                                :width="`${Math.round(100 * damageToTarget / v.dc.totalDamage).toFixed(0)}%`"
                                 class="rounded-xl">
                             </v-sheet>
                         </v-sheet>
@@ -33,8 +34,8 @@
             </v-expansion-panel>
             <!-- 막대 -->
             <v-sheet width="100%" height="16">
-                <v-sheet :color="getMabiNameColor(prettyEntityName(entityMap[v.id]) || v.id)" height="100%"
-                    :width="`${Math.round(100 * v.totalApplyDamage / allApplyDamage).toFixed(0)}%`" class="rounded-xl">
+                <v-sheet :color="getMabiNameColor(prettyEntityName(v.actor)!)" height="100%"
+                    :width="`${Math.round(100 * v.dc.totalDamage / allApplyDamage).toFixed(0)}%`" class="rounded-xl">
                 </v-sheet>
             </v-sheet>
         </template>
@@ -97,10 +98,11 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, inject, ref, computed } from "vue";
+import { defineComponent, inject, ref, computed, onUnmounted } from "vue";
 
 import { getMabiNameColor } from '@/util';
-import { EntityDamage, EntityCondition, ActorManager, BaseActor, GroupActor } from '@/eventActor';
+import { EntityDamage, EntityCondition, ActorManager, BaseActor, GroupActor, EntityActor } from '@/eventActor';
+import { GroupedDamageCollector } from '@/actionCollector';
 
 export default defineComponent({
     setup() {
@@ -110,29 +112,62 @@ export default defineComponent({
         const skillNameMap = inject('skillNameMap');
         const condNameMap = inject('condNameMap');
         const actorManager = inject('actorManager');
+        const dcManager = inject('dcManager');
 
-        const entityMap = actorManager.value.entityMap;
-        const groupMap = actorManager.value.groupMap;
+        const damageCollectorMap: Record<string, GroupedDamageCollector> = {};
+
+        onUnmounted(() => {
+            for (const v of Object.values(damageCollectorMap)) {
+                dcManager.value.removeDamageCollector(v);
+            }
+        });
+
+        const getDC = (attackerId: string) => {
+            const key = `${attackerId}`;
+            if (damageCollectorMap[key]) {
+                return damageCollectorMap[key];
+            }
+
+            const dc = dcManager.value.getGroupedDamageCollector(v => v.Id == attackerId, v => v.TargetId);
+            damageCollectorMap[key] = dc;
+
+            return dc;
+        }
 
         const showEntityDetailDamageList = (attackerId: string, targetId: string) => {
-            const entity = entityMap[attackerId];
+            const entity = entityMap.value[attackerId];
             if (!entity) {
                 return;
             }
 
             detailDialog.value = true;
             detailDialogData.value = {
-                targetName: prettyEntityName(entityMap[targetId]) || targetId,
-                attackerName: prettyEntityName(entity)!,
-                Damages: entity.applyDamages.filter(v => v.TargetId == targetId),
+                targetName: prettyEntityName(entityMap.value[targetId]?.actor) || targetId,
+                attackerName: prettyEntityName(entity.actor)!,
+                Damages: entity.dc.groupedDamages[targetId],
             };
         }
 
+        const entityMap = computed(() => {
+            const m: Record<string, { actor: EntityActor, dc: GroupedDamageCollector }> = {};
+
+            for (const k in actorManager.value.entityMap) {
+                const v = actorManager.value.entityMap[k];
+
+                m[k] = {
+                    actor: v,
+                    dc: getDC(k),
+                }
+            }
+
+            return m;
+        });
+
         const pcEntities = computed(() =>
-            Object.values(entityMap).filter(v => v.isPC).sort((a, b) => b.totalApplyDamage - a.totalApplyDamage));
+            Object.values(entityMap.value).filter(v => v.actor.isPC).sort((a, b) => b.dc.totalDamage - a.dc.totalDamage));
 
         const allApplyDamage = computed(() =>
-            pcEntities.value.reduce((acc, v) => acc + v.totalApplyDamage, 0));
+            pcEntities.value.reduce((acc, v) => acc + v.dc.totalDamage, 0));
 
         const detailDialog = ref(false);
         const detailDialogData = ref<{ targetName: string; attackerName: string; Damages: EntityDamage[] }>();
@@ -182,7 +217,6 @@ export default defineComponent({
             skillNameMap,
             condNameMap,
             entityMap,
-            groupMap,
 
             condTooltip,
             condTooltipParent,

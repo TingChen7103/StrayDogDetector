@@ -1,6 +1,7 @@
 import { ref, computed } from 'vue';
 import { MabiDB } from '@/mabidb';
 import { ActorManager } from '@/eventActor';
+import { DamageCollectorManager } from '@/actionCollector';
 
 export const loadingCount = ref(0);
 export const isLoading = computed(() => loadingCount.value > 0);
@@ -24,4 +25,5 @@ export const raceNameMap = ref<Record<number, string>>({});
 export const skillNameMap = ref<Record<number, string>>({});
 export const condNameMap = ref<Record<number, string>>({});
 
-export const actorManager = ref(new ActorManager());
+export const dcManager = ref(new DamageCollectorManager());
+export const actorManager = ref(new ActorManager(dcManager.value as DamageCollectorManager));

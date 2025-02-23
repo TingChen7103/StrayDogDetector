@@ -51,7 +51,7 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, onMounted, inject, ref, reactive } from "vue";
+import { defineComponent, onMounted, inject, ref } from "vue";
 
 import { SocketClient } from '@/socketClient';
 import { eventBase } from "./protocols";
@@ -77,6 +77,7 @@ export default defineComponent({
         const skillNameMap = inject('skillNameMap');
         const condNameMap = inject('condNameMap');
         const actorManager = inject('actorManager');
+        const dcManager = inject('dcManager');
 
         const socketConnected = ref(false);
         const socket = new SocketClient(`/ws`);
@@ -117,6 +118,7 @@ export default defineComponent({
         const clearData = () => {
             // clear했을 때 서버도 같이 clear하는게 맞을지?
             actorManager.value.clear();
+            dcManager.value.clear();
         }
 
         const download = () => {
@@ -236,9 +238,6 @@ export default defineComponent({
                     condNameMap.value[v.Id] = `${db.value.getCurLangString(v.Name)} ${v.Id}`;
                 }
             }
-
-            Object.assign(actorManager.value.entityMap, reactive({}));
-            Object.assign(actorManager.value.groupMap, reactive({}));
 
             socket.connect();
         });

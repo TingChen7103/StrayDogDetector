@@ -1,23 +1,24 @@
 <template>
     <v-expansion-panels multiple
-        v-for="[k, v] in Object.entries(groupMap).sort((a, b) => b[1].totalTakeDamage - a[1].totalTakeDamage)"
-        v-bind:key="k">
-        <template v-if="v.totalTakeDamage > 0">
+        v-for="v in Object.values(groupMap).sort((a, b) => b.dc.totalDamage - a.dc.totalDamage)"
+        v-bind:key="v.actor.id">
+        <template v-if="v.dc.totalDamage > 0">
             <v-expansion-panel>
                 <v-expansion-panel-title>
                     <v-sheet>
-                        {{ prettyEntityName(v) }} {{ v.totalTakeDamage.toFixed(0) }}
+                        {{ prettyEntityName(v.actor) }} {{ v.dc.totalDamage.toFixed(0) }}
                     </v-sheet>
 
                 </v-expansion-panel-title>
                 <v-expansion-panel-text class="pa-3">
-                    <template v-for="entity, entityk in v.entityMap" v-bind:key="entityk">
-                        <template v-if="entity.totalTakeDamage > 0">
+                    <template v-for="entity, entityk in v.entity" v-bind:key="entityk">
+                        <template v-if="entity.dc.totalDamage > 0">
                             <v-sheet>
-                                * {{ prettyEntityName(entity) }} {{ entity.totalTakeDamage.toFixed(0) }}
-                                {{ entity.finisherId ? `Killed by
-                                ${prettyEntityName(entityMap[entity.finisherId]) || entity.finisherId}` : '' }}
-                                <template v-for="cond in entity.conditionMap" v-bind:key="cond.CCId">
+                                * {{ prettyEntityName(entity.actor) }} {{ entity.dc.totalDamage.toFixed(0) }}
+                                {{ entity.actor.finisherId ? `Killed by
+                                ${prettyEntityName(entityMap[entity.actor.finisherId]?.actor) ||
+                                    entity.actor.finisherId}` : '' }}
+                                <template v-for="cond in entity.actor.conditionMap" v-bind:key="cond.CCId">
                                     <img width="16" height="16"
                                         @mouseover="e => setCondTooltip(e.target! as HTMLElement, cond)"
                                         @mouseleave="e => setCondTooltip(e.target! as HTMLElement, undefined)"
@@ -27,21 +28,22 @@
                             </v-sheet>
 
                             <v-sheet
-                                v-for="[attackerId, damageByAttacker] in Object.entries(entity.totalTakeDamageByAttacker).sort((a, b) => b[1] - a[1])"
+                                v-for="[attackerId, damageByAttacker] in Object.entries(entity.dc.groupedTotalDamages).sort(([, av], [, bv]) => bv - av)"
                                 v-bind:key="attackerId" width="100%" class="mb-4">
                                 <!-- 이름 -->
-                                <v-sheet width="100%" @click.stop="showEntityDetailDamageList(entity.id, attackerId)">
-                                    {{ prettyEntityName(entityMap[attackerId]) || attackerId }} {{
+                                <v-sheet width="100%"
+                                    @click.stop="showEntityDetailDamageList(entity.actor.id, attackerId)">
+                                    {{ prettyEntityName(entityMap[attackerId]?.actor) || attackerId }} {{
                                         damageByAttacker.toFixed(0) }} {{
-                                        (100 * damageByAttacker / entity.totalTakeDamage).toFixed(1) }}%
+                                        (100 * damageByAttacker / entity.dc.totalDamage).toFixed(1) }}%
                                 </v-sheet>
 
                                 <!-- 막대 -->
                                 <v-sheet width="100%" height="16">
-                                    <v-sheet @click.stop="showEntityDetailDamageList(entity.id, attackerId)"
-                                        :color="getMabiNameColor(prettyEntityName(entityMap[attackerId]) || attackerId)"
+                                    <v-sheet @click.stop="showEntityDetailDamageList(entity.actor.id, attackerId)"
+                                        :color="getMabiNameColor(prettyEntityName(entityMap[attackerId]?.actor) || attackerId)"
                                         height="100%"
-                                        :width="`${Math.round(100 * damageByAttacker / entity.totalTakeDamage).toFixed(0)}%`"
+                                        :width="`${Math.round(100 * damageByAttacker / entity.dc.totalDamage).toFixed(0)}%`"
                                         class="rounded-xl">
                                     </v-sheet>
                                 </v-sheet>
@@ -51,21 +53,20 @@
                 </v-expansion-panel-text>
             </v-expansion-panel>
             <v-sheet
-                v-for="[attackerId, damageByAttacker] in Object.entries(v.totalTakeDamageByAttacker).sort((a, b) => b[1] - a[1])"
+                v-for="[attackerId, damageByAttacker] in Object.entries(v.dc.groupedTotalDamages).sort(([, av], [, bv]) => bv - av)"
                 v-bind:key="attackerId" width="100%" class="mb-4 pa-1">
                 <!-- 이름 -->
-                <v-sheet width="100%" @click.stop="showEntityGroupDetailDamageList(v.id, attackerId)">
-                    {{ prettyEntityName(entityMap[attackerId]) || attackerId }} {{ damageByAttacker.toFixed(0) }} {{
-                        (100 *
-                            damageByAttacker /
-                            v.totalTakeDamage).toFixed(1) }}%
+                <v-sheet width="100%" @click.stop="showEntityGroupDetailDamageList(v.actor.id, attackerId)">
+                    {{ prettyEntityName(entityMap[attackerId]?.actor) || attackerId }} {{ damageByAttacker.toFixed(0) }}
+                    {{
+                        (100 * damageByAttacker / v.dc.totalDamage).toFixed(1) }}%
                 </v-sheet>
 
                 <!-- 막대 -->
                 <v-sheet width="100%" height="16">
-                    <v-sheet @click.stop="showEntityGroupDetailDamageList(v.id, attackerId)"
-                        :color="getMabiNameColor(prettyEntityName(entityMap[attackerId]) || attackerId)" height="100%"
-                        :width="`${Math.round(100 * damageByAttacker / v.totalTakeDamage).toFixed(0)}%`"
+                    <v-sheet @click.stop="showEntityGroupDetailDamageList(v.actor.id, attackerId)"
+                        :color="getMabiNameColor(prettyEntityName(entityMap[attackerId]?.actor) || attackerId)"
+                        height="100%" :width="`${Math.round(100 * damageByAttacker / v.dc.totalDamage).toFixed(0)}%`"
                         class="rounded-xl">
                     </v-sheet>
                 </v-sheet>
@@ -130,10 +131,11 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, inject, ref } from "vue";
+import { defineComponent, inject, ref, computed, onUnmounted } from "vue";
 
 import { getMabiNameColor } from '@/util';
-import { EntityDamage, EntityCondition, ActorManager, BaseActor, GroupActor } from '@/eventActor';
+import { EntityDamage, EntityCondition, ActorManager, BaseActor, GroupActor, EntityActor } from '@/eventActor';
+import { GroupedDamageCollector } from '@/actionCollector';
 
 export default defineComponent({
     setup() {
@@ -143,37 +145,107 @@ export default defineComponent({
         const skillNameMap = inject('skillNameMap');
         const condNameMap = inject('condNameMap');
         const actorManager = inject('actorManager');
+        const dcManager = inject('dcManager');
 
-        const entityMap = actorManager.value.entityMap;
-        const groupMap = actorManager.value.groupMap;
+        const damageCollectorMap: Record<string, GroupedDamageCollector> = {};
+
+        onUnmounted(() => {
+            for (const v of Object.values(damageCollectorMap)) {
+                dcManager.value.removeDamageCollector(v);
+            }
+        });
+
+        const getGroupDC = (groupActor: GroupActor) => {
+            const key = `group:${groupActor.id}`;
+            if (damageCollectorMap[key]) {
+                return damageCollectorMap[key];
+            }
+
+            const dc = dcManager.value.getGroupedDamageCollector(v => !!groupActor.entityMap[v.TargetId], v => v.Id);
+            damageCollectorMap[key] = dc;
+
+            return dc;
+        }
+
+        const getSingleDC = (targetId: string) => {
+            const key = `${targetId}`;
+            if (damageCollectorMap[key]) {
+                return damageCollectorMap[key];
+            }
+
+            const dc = dcManager.value.getGroupedDamageCollector(v => v.TargetId == targetId, v => v.Id);
+            damageCollectorMap[key] = dc;
+
+            return dc;
+        }
 
         const showEntityDetailDamageList = (targetId: string, attackerId: string) => {
-            const entity = entityMap[targetId];
+            const entity = entityMap.value[targetId];
             if (!entity) {
                 return;
             }
 
             detailDialog.value = true;
             detailDialogData.value = {
-                targetName: prettyEntityName(entity)!,
-                attackerName: prettyEntityName(entityMap[attackerId]) || attackerId,
-                Damages: entity.takeDamages.filter(v => v.Id == attackerId),
+                targetName: prettyEntityName(entity.actor)!,
+                attackerName: prettyEntityName(entityMap.value[attackerId]?.actor) || attackerId,
+                Damages: entity.dc.groupedDamages[attackerId],
             };
         }
 
         const showEntityGroupDetailDamageList = (targetId: string, attackerId: string) => {
-            const group = groupMap[targetId];
+            const group = groupMap.value[targetId];
             if (!group) {
                 return;
             }
 
             detailDialog.value = true;
             detailDialogData.value = {
-                targetName: prettyEntityName(group)!,
-                attackerName: prettyEntityName(entityMap[attackerId]) || attackerId,
-                Damages: group.takeDamages.filter(v => v.Id == attackerId),
+                targetName: prettyEntityName(group.actor)!,
+                attackerName: prettyEntityName(entityMap.value[attackerId]?.actor) || attackerId,
+                Damages: group.dc.groupedDamages[attackerId],
             };
         }
+
+        const entityMap = computed(() => {
+            const m: Record<string, { actor: EntityActor, dc: GroupedDamageCollector }> = {};
+
+            for (const k in actorManager.value.entityMap) {
+                const v = actorManager.value.entityMap[k];
+
+                m[k] = {
+                    actor: v,
+                    dc: getSingleDC(k),
+                }
+            }
+
+            return m;
+        });
+
+        const groupMap = computed(() => {
+            const m: Record<string, {
+                actor: GroupActor,
+                dc: GroupedDamageCollector,
+                entity: Record<string, { actor: EntityActor, dc: GroupedDamageCollector }>,
+            }> = {};
+
+            for (const k in actorManager.value.groupMap) {
+                const v = actorManager.value.groupMap[k];
+                const entity: Record<string, { actor: EntityActor, dc: GroupedDamageCollector }> = {};
+
+                for (const ek in v.entityMap) {
+                    entity[ek] = entityMap.value[ek];
+                }
+
+                m[k] = {
+                    actor: v,
+                    dc: getGroupDC(v),
+                    entity,
+                }
+            }
+
+            return m;
+        });
 
         const detailDialog = ref(false);
         const detailDialogData = ref<{ targetName: string; attackerName: string; Damages: EntityDamage[] }>();
@@ -232,6 +304,8 @@ export default defineComponent({
             showEntityGroupDetailDamageList,
             getMabiNameColor,
             prettyEntityName,
+            getGroupDC,
+            getSingleDC,
         }
     }
 });
