@@ -86,6 +86,14 @@ export class ActorManager {
 
                 entity.onUnequipItem(event as protocols.eventEntityUnequipItem);
                 break;
+
+            case protocols.eventIdEntityUpdateBody:
+                if (!entity) {
+                    return;
+                }
+
+                entity.onUpdateBody(event as protocols.eventEntityUpdateBody);
+                break;
         }
     }
 
@@ -168,6 +176,16 @@ export abstract class BaseActor implements IEventActor {
         return this._name;
     }
 
+    protected _body: EntityBody = shallowReactive({
+        Height: 1,
+        Weight: 1,
+        Upper: 1,
+        Lower: 1,
+    });
+    public get body() {
+        return this._body;
+    }
+
     /** 받은 대미지 */
     public get totalTakeDamage() {
         return this._totalTakeDamage;
@@ -235,6 +253,13 @@ export abstract class BaseActor implements IEventActor {
         event;
     }
 
+    public onUpdateBody(event: protocols.eventEntityUpdateBody): void {
+        this._body.Height = event.Height;
+        this._body.Weight = event.Weight;
+        this._body.Upper = event.Upper;
+        this._body.Lower = event.Lower;
+    }
+
     public clear() {
         this._totalTakeDamage = 0;
         this._takeDamages.length = 0;
@@ -247,6 +272,16 @@ export abstract class BaseActor implements IEventActor {
 export class EntityActor extends BaseActor {
     public constructor(mgr: ActorManager, id: string, raceId: number, name: string, private _group: GroupActor) {
         super(mgr, id, raceId, name);
+    }
+
+    protected _guildName = '';
+    public get guildName() {
+        return this._guildName;
+    }
+
+    protected _ownerId = '';
+    public get ownerId() {
+        return this._ownerId;
     }
 
     public get group() {
@@ -272,6 +307,12 @@ export class EntityActor extends BaseActor {
 
     public override onEntityAppear(event: protocols.eventEntityAppear): void {
         this._finisherId = '';
+        this._guildName = event.GuildName;
+        this._ownerId = event.OwnerId;
+        this._body.Height = event.Height;
+        this._body.Weight = event.Weight;
+        this._body.Upper = event.Upper;
+        this._body.Lower = event.Lower;
 
         if (ActorManager.pcRaceSet.has(event.RaceId)) {
             // pc일 경우 damage 초기와 안함
@@ -472,4 +513,11 @@ export type EntityItem = {
     Color5: string;
     Color6: string;
     Color7: string;
+}
+
+export type EntityBody = {
+    Height: number;
+    Weight: number;
+    Upper: number;
+    Lower: number;
 }

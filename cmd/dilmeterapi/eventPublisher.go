@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
+	"math"
 	"strconv"
 	"sync"
 	"time"
@@ -29,17 +31,20 @@ type eventClient struct {
 }
 
 const (
-	opcodeEntityAppear      = 0x520c
-	opcodeEntityDisappear   = 0x520d
-	opcodeEntitiesAppear    = 0x5334
-	opcodeEntitiesDisappear = 0x5335
-	opcodeEquipmentChanged  = 0x59e6
-	opcodeUnequipment       = 0x59e7
-	opcodeSetFinisher       = 0x7921
-	opcodeCombatAction      = 0x7926
-	opcodeEffectDelayed     = 0x9094
-	opcodeConditionUpdate   = 0xa028
+	opcodeEntityAppear       = 0x520c
+	opcodeEntityDisappear    = 0x520d
+	OpcodeCreatureBodyUpdate = 0x520e
+	opcodeEntitiesAppear     = 0x5334
+	opcodeEntitiesDisappear  = 0x5335
+	opcodeEquipmentChanged   = 0x59e6
+	opcodeUnequipment        = 0x59e7
+	opcodeSetFinisher        = 0x7921
+	opcodeCombatAction       = 0x7926
+	opcodeEffectDelayed      = 0x9094
+	opcodeConditionUpdate    = 0xa028
 )
+
+var le = binary.LittleEndian
 
 func newEventPublisher(ctx context.Context, r *packet.GameServerPacketReader) *eventPublisher {
 	v := &eventPublisher{
@@ -94,15 +99,7 @@ func (t *eventPublisher) loop() {
 				t.entityCache.add(entity)
 				t.Unlock()
 
-				e := &eventEntityAppear{
-					eventBase: eventBase{
-						EventId: eventIdEntityAppear,
-						At:      time.Now().Unix(),
-						Id:      strconv.FormatUint(entity.Id, 10),
-					},
-					Name:   entity.Name,
-					RaceId: entity.RaceId,
-				}
+				e := toEventEntityAppear(time.Now().Unix(), entity)
 
 				t.publish(e)
 
@@ -198,6 +195,37 @@ func (t *eventPublisher) loop() {
 
 				continue
 
+			case OpcodeCreatureBodyUpdate:
+				if len(p.Msg) < 1 || p.Msg[0].Type() != packet.MessageElemTypeBin {
+					logger.Println("invalid packet")
+					continue
+				}
+
+				b := p.Msg[0].Data().([]byte)
+
+				height := math.Float32frombits(le.Uint32(b[0:]))
+				weight := math.Float32frombits(le.Uint32(b[4:]))
+				upper := math.Float32frombits(le.Uint32(b[8:]))
+				lower := math.Float32frombits(le.Uint32(b[12:]))
+
+				t.entityCache.updateBody(p.Id, height, weight, upper, lower)
+
+				e := &eventEntityUpdateBody{
+					eventBase: eventBase{
+						EventId: eventIdEntityUpdateBody,
+						At:      time.Now().Unix(),
+						Id:      strconv.FormatUint(p.Id, 10),
+					},
+					Height: height,
+					Weight: weight,
+					Upper:  upper,
+					Lower:  lower,
+				}
+
+				t.publish(e)
+
+				continue
+
 			case opcodeEntitiesAppear:
 				entities, err := packet.ParseEntitiesAppearPacket(p)
 				if err != nil {
@@ -216,15 +244,8 @@ func (t *eventPublisher) loop() {
 					t.entityCache.add(entity)
 					t.Unlock()
 
-					e := &eventEntityAppear{
-						eventBase: eventBase{
-							EventId: eventIdEntityAppear,
-							At:      now,
-							Id:      strconv.FormatUint(entity.Id, 10),
-						},
-						Name:   entity.Name,
-						RaceId: entity.RaceId,
-					}
+					e := toEventEntityAppear(now, entity)
+
 					t.publish(e)
 				}
 				continue
@@ -593,15 +614,7 @@ func (t *eventPublisher) addClient(ctx context.Context, ch chan<- iEvent) uint32
 
 	t.Lock()
 	for _, entity := range t.entityCache {
-		e := &eventEntityAppear{
-			eventBase: eventBase{
-				EventId: eventIdEntityAppear,
-				At:      now,
-				Id:      strconv.FormatUint(entity.Id, 10),
-			},
-			Name:   entity.Name,
-			RaceId: entity.RaceId,
-		}
+		e := toEventEntityAppear(now, entity.EntityInfo)
 
 		events = append(events, e)
 
@@ -661,4 +674,30 @@ func (t *eventPublisher) addClient(ctx context.Context, ch chan<- iEvent) uint32
 	t.Unlock()
 
 	return clientId
+}
+
+func toEventEntityAppear(now int64, p *packet.EntityInfo) *eventEntityAppear {
+	ownerId := ""
+
+	if p.OwnerId != 0 {
+		ownerId = strconv.FormatUint(p.OwnerId, 10)
+	}
+
+	v := &eventEntityAppear{
+		eventBase: eventBase{
+			EventId: eventIdEntityAppear,
+			At:      now,
+			Id:      strconv.FormatUint(p.Id, 10),
+		},
+		Name:      p.Name,
+		RaceId:    p.RaceId,
+		Height:    p.Height,
+		Weight:    p.Weight,
+		Upper:     p.Upper,
+		Lower:     p.Lower,
+		GuildName: p.GuildName,
+		OwnerId:   ownerId,
+	}
+
+	return v
 }

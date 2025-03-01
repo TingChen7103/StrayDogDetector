@@ -181,6 +181,21 @@ func (t entityCache) unequipItem(id uint64, pocketType uint32) {
 	delete(e.equipItemMap, pocketType)
 }
 
+func (t entityCache) updateBody(id uint64, height float32, weight float32, upper float32, lower float32) {
+	e := t[id]
+	if e == nil {
+		return
+	}
+
+	e.Lock()
+	defer e.Unlock()
+
+	e.Height = height
+	e.Weight = weight
+	e.Upper = upper
+	e.Lower = lower
+}
+
 func (t entityCache) cleanup() {
 	now := time.Now().Unix()
 	mobRemoveSec, userRemoveSec := int64(1*60), int64(5*60)

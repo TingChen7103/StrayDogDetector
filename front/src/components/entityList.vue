@@ -3,10 +3,14 @@
         <v-expansion-panel>
             <v-expansion-panel-title>
                 <v-sheet>
-                    {{ v.name }} {{ v.id }} {{ raceNameMap[v.raceId] }}
+                    {{ v.name }} {{ raceNameMap[v.raceId] }} {{ v.guildName }}
                 </v-sheet>
             </v-expansion-panel-title>
             <v-expansion-panel-text class="pa-3">
+                <v-sheet width="100%" class="mb-2">
+                    h: {{ v.body.Height.toFixed(2) }} w: {{ v.body.Weight.toFixed(2) }} u: {{
+                        v.body.Upper.toFixed(2) }} l: {{ v.body.Lower.toFixed(2) }}
+                </v-sheet>
                 <v-sheet width="100%" class="mb-2">
                     <template v-for="cond in Object.values(v.conditionMap).sort((a, b) => a.CCId - b.CCId)"
                         v-bind:key="cond.CCId">

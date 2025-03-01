@@ -11,6 +11,7 @@ const (
 	eventIdFinish
 	eventIdEntityEquipItem
 	eventIdEntityUnequipItem
+	eventIdEntityUpdateBody
 )
 
 type iEvent interface {
@@ -29,8 +30,14 @@ func (t *eventBase) GetEventId() eventId {
 
 type eventEntityAppear struct {
 	eventBase
-	Name   string
-	RaceId uint32
+	Name      string
+	RaceId    uint32
+	Height    float32
+	Weight    float32
+	Upper     float32
+	Lower     float32
+	GuildName string
+	OwnerId   string
 }
 
 type eventEntityDisappear struct {
@@ -77,4 +84,12 @@ type eventEntityEquipItem struct {
 type eventEntityUnequipItem struct {
 	eventBase
 	PocketType uint32
+}
+
+type eventEntityUpdateBody struct {
+	eventBase
+	Height float32
+	Weight float32
+	Upper  float32
+	Lower  float32
 }

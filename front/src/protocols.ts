@@ -8,6 +8,7 @@ export const eventIdCharacterConditionDisable = 5;
 export const eventIdFinish = 6;
 export const eventIdEntityEquipItem = 7;
 export const eventIdEntityUnequipItem = 8;
+export const eventIdEntityUpdateBody = 9;
 
 export type eventBase = {
     EventId: eventId;
@@ -19,6 +20,12 @@ export type eventEntityAppear = eventBase & {
     EventId: 1;
     Name: string;
     RaceId: number;
+    Height: number;
+    Weight: number;
+    Upper: number;
+    Lower: number;
+    GuildName: string;
+    OwnerId: string;
 }
 
 export type eventDamage = eventBase & {
@@ -62,4 +69,12 @@ export type eventEntityUnequipItem = eventBase & {
     EventId: 8;
     PocketType: number;
     ItemId: number;
+}
+
+export type eventEntityUpdateBody = eventBase & {
+    EventId: 9;
+    Height: number;
+    Weight: number;
+    Upper: number;
+    Lower: number;
 }
