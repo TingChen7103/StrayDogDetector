@@ -1,4 +1,4 @@
-import { ref, computed } from 'vue';
+import { ref, shallowRef, computed } from 'vue';
 import { MabiDB } from '@/mabidb';
 import { ActorManager } from '@/eventActor';
 import { DamageCollectorManager } from '@/actionCollector';
@@ -25,5 +25,5 @@ export const raceNameMap = ref<Record<number, string>>({});
 export const skillNameMap = ref<Record<number, string>>({});
 export const condNameMap = ref<Record<number, string>>({});
 
-export const dcManager = ref(new DamageCollectorManager());
-export const actorManager = ref(new ActorManager(dcManager.value as DamageCollectorManager));
+export const dcManager = shallowRef(new DamageCollectorManager());
+export const actorManager = shallowRef(new ActorManager(dcManager.value as DamageCollectorManager));

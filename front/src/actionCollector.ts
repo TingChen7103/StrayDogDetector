@@ -1,4 +1,4 @@
-import { reactive } from 'vue';
+import { customRef } from 'vue';
 
 import { EntityDamage } from '@/eventActor';
 
@@ -27,7 +27,7 @@ export class DamageCollectorManager {
         this._et.addEventListener("Damage", v);
         this._et.addEventListener("Clear", v);
 
-        return v;
+        return CustomReactive(v);
     }
 
     public getGroupedDamageCollector(filter: DamageCollectorFilter, getGroupKey: DamageCollectorGroupKey): GroupedDamageCollector {
@@ -39,7 +39,7 @@ export class DamageCollectorManager {
         this._et.addEventListener("Damage", v);
         this._et.addEventListener("Clear", v);
 
-        return v;
+        return CustomReactive(v);
     }
 
     public getDualGroupedDamageCollector(filter: DamageCollectorFilter, getGroupKey1: DamageCollectorGroupKey, getGroupKey2: DamageCollectorGroupKey): DualGroupedDamageCollector {
@@ -51,7 +51,7 @@ export class DamageCollectorManager {
         this._et.addEventListener("Damage", v);
         this._et.addEventListener("Clear", v);
 
-        return v;
+        return CustomReactive(v);
     }
 
     public removeDamageCollector(collector: DamageCollectorBase): void {
@@ -65,7 +65,18 @@ export class DamageCollectorManager {
     }
 }
 
-export abstract class DamageCollectorBase implements DamageEventListenerObject {
+export abstract class DamageCollectorBase implements DamageEventListenerObject, IUpdateCallback {
+    private static objectIdSeq = 1;
+    private _objectId = DamageCollectorBase.objectIdSeq++;
+    public get objectId(): number {
+        return this._objectId;
+    }
+
+    protected vueUpdateTrack?: () => void;
+    private vueUpdateTrigger?: () => void;
+    private vueUpdateTimeout = 0;
+    private static vueUpdateTick = 33;
+
     public constructor(private _filter: DamageCollectorFilter) {
     }
 
@@ -76,7 +87,7 @@ export abstract class DamageCollectorBase implements DamageEventListenerObject {
                 break;
 
             case "Clear":
-                this.onClear();
+                this.handleClear();
                 break;
         }
     }
@@ -87,11 +98,37 @@ export abstract class DamageCollectorBase implements DamageEventListenerObject {
         }
 
         this.onDamage(p);
+
+        if (!this.vueUpdateTimeout) {
+            this.vueUpdateTimeout = setTimeout(() => {
+                this.vueUpdate();
+            }, DamageCollectorBase.vueUpdateTick);
+        }
+    }
+
+    public handleClear(): void {
+        this.onClear();
+
+        if (!this.vueUpdateTimeout) {
+            this.vueUpdateTimeout = setTimeout(() => {
+                this.vueUpdate();
+            }, DamageCollectorBase.vueUpdateTick);
+        }
     }
 
     protected abstract onDamage(p: EntityDamage): void;
 
     protected abstract onClear(): void;
+
+    public setUpdateCallback(track: () => void, trigger: () => void): void {
+        this.vueUpdateTrack = track;
+        this.vueUpdateTrigger = trigger;
+    }
+
+    private vueUpdate(): void {
+        this.vueUpdateTimeout = 0;
+        this.vueUpdateTrigger?.();
+    }
 }
 
 export class FilteredDamageCollector extends DamageCollectorBase {
@@ -100,23 +137,25 @@ export class FilteredDamageCollector extends DamageCollectorBase {
     }
 
     public get damages() {
+        this.vueUpdateTrack?.();
         return this._damages;
     }
     private _damages = [] as EntityDamage[];
 
     public get totalDamage() {
-        return this._totalDamage.value;
+        this.vueUpdateTrack?.();
+        return this._totalDamage;
     }
-    private _totalDamage = reactive({value: 0});
+    private _totalDamage = 0;
 
     protected override onDamage(p: EntityDamage): void {
         this._damages.push(p);
-        this._totalDamage.value += p.Damage;
+        this._totalDamage += p.Damage;
     }
 
     protected override onClear(): void {
         this._damages.length = 0;
-        this._totalDamage.value = 0;
+        this._totalDamage = 0;
     }
 }
 
@@ -127,11 +166,13 @@ export class GroupedDamageCollector extends FilteredDamageCollector {
 
     private _groupedDamages: Record<string, EntityDamage[]> = {};
     public get groupedDamages() {
+        this.vueUpdateTrack?.();
         return this._groupedDamages;
     }
 
-    private _groupedTotalDamages: Record<string, number> = reactive({});
+    private _groupedTotalDamages: Record<string, number> = {};
     public get groupedTotalDamages() {
+        this.vueUpdateTrack?.();
         return this._groupedTotalDamages;
     }
 
@@ -168,21 +209,25 @@ export class DualGroupedDamageCollector extends GroupedDamageCollector {
 
     private _grouped2Damages: Record<string, EntityDamage[]> = {};
     public get grouped2Damages() {
+        this.vueUpdateTrack?.();
         return this._grouped2Damages;
     }
 
-    private _grouped2TotalDamages: Record<string, number> = reactive({});
+    private _grouped2TotalDamages: Record<string, number> = {};
     public get grouped2TotalDamages() {
+        this.vueUpdateTrack?.();
         return this._grouped2TotalDamages;
     }
 
     private _dualGroupedDamages: Record<string, Record<string, EntityDamage[]>> = {};
     public get dualGroupedDamages() {
+        this.vueUpdateTrack?.();
         return this._dualGroupedDamages;
     }
 
-    private _dualGroupedTotalDamages: Record<string, Record<string, number>> = reactive({});
+    private _dualGroupedTotalDamages: Record<string, Record<string, number>> = {};
     public get dualGroupedTotalDamages() {
+        this.vueUpdateTrack?.();
         return this._dualGroupedTotalDamages;
     }
 
@@ -268,6 +313,7 @@ interface DamageEventListener extends EventListener {
 */
 
 interface DamageEventListenerObject extends EventListenerObject {
+    objectId: number;
     handleEvent(evt: CustomEvent<EntityDamage>): void;
 }
 
@@ -289,10 +335,10 @@ class DamageEventTarget extends EventTarget implements IDamageEventTarget {
     }
     private _count = 0;
 
-    private cbSet: Record<string, Set<DamageEventListenerObject>> = {};
+    private cbSet: Record<string, Set<number>> = {};
 
     public override addEventListener(type: DamageEventType, listener: DamageEventListenerObject, options?: boolean | AddEventListenerOptions): void {
-        if (this.cbSet[type]?.has(listener)) {
+        if (this.cbSet[type]?.has(listener.objectId)) {
             return;
         }
 
@@ -300,13 +346,13 @@ class DamageEventTarget extends EventTarget implements IDamageEventTarget {
             this.cbSet[type] = new Set();
         }
 
-        this.cbSet[type].add(listener);
+        this.cbSet[type].add(listener.objectId);
         super.addEventListener(type, listener, options);
         this._count++;
     }
 
     public override removeEventListener(type: DamageEventType, listener: DamageEventListenerObject, options?: boolean | EventListenerOptions): void {
-        if (!this.cbSet[type]?.has(listener)) {
+        if (!this.cbSet[type]?.has(listener.objectId)) {
             return;
         }
 
@@ -315,8 +361,32 @@ class DamageEventTarget extends EventTarget implements IDamageEventTarget {
             return;
         }
 
-        this.cbSet[type].delete(listener);
+        this.cbSet[type].delete(listener.objectId);
         super.removeEventListener(type, listener, options);
         this._count--;
     }
+}
+
+
+interface IUpdateCallback {
+    setUpdateCallback(track: () => void, trigger: () => void): void;
+}
+
+function CustomReactive<T extends IUpdateCallback>(value: T): T {
+    const state = customRef<T>((track, trigger) => {
+        value.setUpdateCallback(track, trigger);
+
+        return {
+            get() {
+                track();
+                return value;
+            },
+            set(newValue: T) {
+                value = newValue;
+                trigger();
+            },
+        };
+    });
+
+    return state.value;
 }

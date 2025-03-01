@@ -1,4 +1,4 @@
-import { reactive } from 'vue';
+import { shallowReactive } from 'vue';
 import * as bounds from 'binary-search-bounds';
 
 import * as protocols from '@/protocols';
@@ -10,8 +10,8 @@ export class ActorManager {
     constructor(private _damageCollector: DamageCollectorManager) {
     }
 
-    public entityMap: Record<string, EntityActor> = reactive({});
-    public groupMap: Record<string, GroupActor> = reactive({});
+    public entityMap: Record<string, EntityActor> = shallowReactive({});
+    public groupMap: Record<string, GroupActor> = shallowReactive({});
     public damages: protocols.eventDamage[] = [];
 
     public static pcRaceSet = new Set<number>([8001, 8002, 9001, 9002, 10001, 10002]);
@@ -350,7 +350,7 @@ export class GroupActor extends BaseActor {
         super(mgr, id, raceId, groupName);
     }
 
-    private _entityMap: Record<string, EntityActor> = reactive({});
+    private _entityMap: Record<string, EntityActor> = shallowReactive({});
     public get entityMap() {
         return this._entityMap;
     }
