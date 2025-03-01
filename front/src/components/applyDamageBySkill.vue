@@ -1,6 +1,6 @@
 <template>
     <v-select v-model="targetId" :items="targetIdList"
-        :item-title="vv => `${vv[0] ? prettyEntityName(entityMap[vv[0]]?.actor) : 'all'} ${vv[1].toFixed(0)}`"
+        :item-title="vv => `${vv[0] ? prettyEntityName(entityMap[vv[0]]?.actor) : 'all'} ${vv[1]?.toFixed(0)}`"
         :item-value="vv => vv[0]" class="ma-2" variant="outlined" density="compact" hide-details>
     </v-select>
 

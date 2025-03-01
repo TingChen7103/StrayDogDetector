@@ -70,6 +70,22 @@ export class ActorManager {
 
                 entity.onFinish(event as protocols.eventFinish);
                 break;
+
+            case protocols.eventIdEntityEquipItem:
+                if (!entity) {
+                    return;
+                }
+
+                entity.onEquipItem(event as protocols.eventEntityEquipItem);
+                break;
+
+            case protocols.eventIdEntityUnequipItem:
+                if (!entity) {
+                    return;
+                }
+
+                entity.onUnequipItem(event as protocols.eventEntityUnequipItem);
+                break;
         }
     }
 
@@ -209,6 +225,16 @@ export abstract class BaseActor implements IEventActor {
         event;
     }
 
+    public onEquipItem(event: protocols.eventEntityEquipItem): void {
+        // nothing
+        event;
+    }
+
+    public onUnequipItem(event: protocols.eventEntityUnequipItem): void {
+        // nothing
+        event;
+    }
+
     public clear() {
         this._totalTakeDamage = 0;
         this._takeDamages.length = 0;
@@ -227,7 +253,7 @@ export class EntityActor extends BaseActor {
         return this._group;
     }
 
-    protected _conditionMap: Record<number, EntityCondition> = {};
+    protected _conditionMap: Record<number, EntityCondition> = shallowReactive({});
     public get conditionMap() {
         return this._conditionMap;
     }
@@ -237,6 +263,11 @@ export class EntityActor extends BaseActor {
     private _finisherId = '';
     public get finisherId() {
         return this._finisherId;
+    }
+
+    protected _equipItemMap: Record<number, EntityItem> = shallowReactive({});
+    public get equipItemMap() {
+        return this._equipItemMap;
     }
 
     public override onEntityAppear(event: protocols.eventEntityAppear): void {
@@ -325,6 +356,17 @@ export class EntityActor extends BaseActor {
 
     public override onFinish(event: protocols.eventFinish): void {
         this._finisherId = event.AttackerId;
+    }
+
+    public override onEquipItem(event: protocols.eventEntityEquipItem): void {
+        // this._equipItemMap[event.PocketType] = {
+        //     ...event,
+        // };
+        this._equipItemMap[event.PocketType] = event;
+    }
+
+    public override onUnequipItem(event: protocols.eventEntityUnequipItem): void {
+        delete this._equipItemMap[event.PocketType];
     }
 
     public getConditionState(at: number): EntityCondition[] {
@@ -419,4 +461,15 @@ export type EntityCondition = {
 type EntityConditionState = {
     At: number;
     List: EntityCondition[];
+}
+
+export type EntityItem = {
+    PocketType: number;
+    ItemId: number;
+    Color1: string;
+    Color2: string;
+    Color3: string;
+    Color5: string;
+    Color6: string;
+    Color7: string;
 }

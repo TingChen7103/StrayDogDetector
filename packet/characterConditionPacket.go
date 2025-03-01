@@ -7,11 +7,9 @@ import (
 )
 
 type CharacterConditionPacket struct {
-	Id         uint64
-	IsEnable   bool
-	CCId       uint32
-	DisableAt  int64
-	AttackerId uint64
+	Id       uint64
+	IsEnable bool
+	EntityCharacterCondition
 }
 
 func ParseCharacterConditionPacket(p *GamePacket) (*CharacterConditionPacket, error) {
@@ -32,7 +30,9 @@ func ParseCharacterConditionPacket(p *GamePacket) (*CharacterConditionPacket, er
 		v := &CharacterConditionPacket{
 			Id:       p.Id,
 			IsEnable: false,
-			CCId:     ccId,
+			EntityCharacterCondition: EntityCharacterCondition{
+				CCId: ccId,
+			},
 		}
 
 		return v, nil
@@ -55,11 +55,13 @@ func ParseCharacterConditionPacket(p *GamePacket) (*CharacterConditionPacket, er
 	disableAt := util.ParseMabiTime(disableAtRaw).Unix()
 
 	v := &CharacterConditionPacket{
-		Id:         p.Id,
-		IsEnable:   true,
-		CCId:       ccId,
-		DisableAt:  disableAt,
-		AttackerId: attackerId,
+		Id:       p.Id,
+		IsEnable: true,
+		EntityCharacterCondition: EntityCharacterCondition{
+			CCId:       ccId,
+			DisableAt:  disableAt,
+			AttackerId: attackerId,
+		},
 	}
 
 	return v, nil

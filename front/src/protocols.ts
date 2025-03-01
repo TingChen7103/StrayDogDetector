@@ -6,6 +6,8 @@ export const eventIdDamage = 3;
 export const eventIdCharacterConditionEnable = 4;
 export const eventIdCharacterConditionDisable = 5;
 export const eventIdFinish = 6;
+export const eventIdEntityEquipItem = 7;
+export const eventIdEntityUnequipItem = 8;
 
 export type eventBase = {
     EventId: eventId;
@@ -42,4 +44,22 @@ export type eventCharacterConditionDisable = eventBase & {
 export type eventFinish = eventBase & {
     EventId: 6;
     AttackerId: string;
+}
+
+export type eventEntityEquipItem = eventBase & {
+    EventId: 7;
+    PocketType: number;
+    ItemId: number;
+    Color1: string;
+    Color2: string;
+    Color3: string;
+    Color5: string;
+    Color6: string;
+    Color7: string;
+}
+
+export type eventEntityUnequipItem = eventBase & {
+    EventId: 8;
+    PocketType: number;
+    ItemId: number;
 }

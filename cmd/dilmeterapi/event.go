@@ -9,6 +9,8 @@ const (
 	eventIdCharacterConditionEnable
 	eventIdCharacterConditionDisable
 	eventIdFinish
+	eventIdEntityEquipItem
+	eventIdEntityUnequipItem
 )
 
 type iEvent interface {
@@ -58,4 +60,21 @@ type eventCharacterConditionDisable struct {
 type eventFinish struct {
 	eventBase
 	AttackerId string
+}
+
+type eventEntityEquipItem struct {
+	eventBase
+	PocketType uint32
+	ItemId     uint32
+	Color1     string
+	Color2     string
+	Color3     string
+	Color5     string
+	Color6     string
+	Color7     string
+}
+
+type eventEntityUnequipItem struct {
+	eventBase
+	PocketType uint32
 }

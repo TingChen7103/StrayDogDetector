@@ -13,6 +13,7 @@ declare module '@vue/runtime-core' {
     function inject(key: 'raceNameMap'): Ref<Record<number, string>>;
     function inject(key: 'skillNameMap'): Ref<Record<number, string>>;
     function inject(key: 'condNameMap'): Ref<Record<number, string>>;
+    function inject(key: 'itemNameMap'): Ref<Record<number, string>>;
     function inject(key: 'actorManager'): Ref<ActorManager>;
     function inject(key: 'dcManager'): Ref<DamageCollectorManager>;
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"sync"
 	"time"
@@ -32,6 +33,8 @@ const (
 	opcodeEntityDisappear   = 0x520d
 	opcodeEntitiesAppear    = 0x5334
 	opcodeEntitiesDisappear = 0x5335
+	opcodeEquipmentChanged  = 0x59e6
+	opcodeUnequipment       = 0x59e7
 	opcodeSetFinisher       = 0x7921
 	opcodeCombatAction      = 0x7926
 	opcodeEffectDelayed     = 0x9094
@@ -100,11 +103,79 @@ func (t *eventPublisher) loop() {
 					Name:   entity.Name,
 					RaceId: entity.RaceId,
 				}
+
 				t.publish(e)
+
+				for _, v := range entity.CharacterConditionMap {
+					if !t.entityCache.addOrUpdateCondition(entity.Id, v) {
+						continue
+					}
+
+					attackerId := ""
+					if v.AttackerId != 0 {
+						attackerId = strconv.FormatUint(v.AttackerId, 10)
+					}
+
+					e := &eventCharacterConditionEnable{
+						eventBase: eventBase{
+							EventId: eventIdCharacterConditionEnable,
+							At:      time.Now().Unix(),
+							Id:      strconv.FormatUint(entity.Id, 10),
+						},
+						CCId:       v.CCId,
+						DisableAt:  v.DisableAt,
+						AttackerId: attackerId,
+					}
+
+					t.publish(e)
+				}
+
+				for _, v := range entity.EquipItemMap {
+					if !t.entityCache.addOrUpdateEquipItem(entity.Id, v) {
+						continue
+					}
+
+					e := &eventEntityEquipItem{
+						eventBase: eventBase{
+							EventId: eventIdEntityEquipItem,
+							At:      time.Now().Unix(),
+							Id:      strconv.FormatUint(entity.Id, 10),
+						},
+						PocketType: v.PocketType,
+						ItemId:     v.ItemId,
+						Color1:     fmt.Sprintf("#%06x", v.Color1),
+						Color2:     fmt.Sprintf("#%06x", v.Color2),
+						Color3:     fmt.Sprintf("#%06x", v.Color3),
+						Color5:     fmt.Sprintf("#%06x", v.Color5),
+						Color6:     fmt.Sprintf("#%06x", v.Color6),
+						Color7:     fmt.Sprintf("#%06x", v.Color7),
+					}
+
+					t.publish(e)
+				}
+
+				for _, pocketType := range t.entityCache.allEquipItemPockets(entity.Id) {
+					if entity.EquipItemMap[pocketType] != nil {
+						continue
+					}
+
+					t.entityCache.unequipItem(entity.Id, pocketType)
+
+					e := &eventEntityUnequipItem{
+						eventBase: eventBase{
+							EventId: eventIdEntityUnequipItem,
+							At:      time.Now().Unix(),
+							Id:      strconv.FormatUint(entity.Id, 10),
+						},
+						PocketType: pocketType,
+					}
+
+					t.publish(e)
+				}
 
 				continue
 
-			case 0x520d:
+			case opcodeEntityDisappear:
 				if len(p.Msg) < 1 || p.Msg[0].Type() != packet.MessageElemTypeLong {
 					logger.Println("invalid packet")
 					continue
@@ -205,6 +276,69 @@ func (t *eventPublisher) loop() {
 						msg = msg[1:]
 					}
 				}
+				continue
+
+			case opcodeEquipmentChanged:
+				if len(p.Msg) < 1 || p.Msg[0].Type() != packet.MessageElemTypeBin {
+					logger.Println("invalid packet", p.Op)
+					continue
+				}
+
+				b := p.Msg[0].Data().([]byte)
+				info, err := packet.EntityItemReader(b)
+				if err != nil {
+					logger.Println("EntityItemReader failed:", err)
+					continue
+				}
+
+				if !t.entityCache.addOrUpdateEquipItem(p.Id, info) {
+					continue
+				}
+
+				e := &eventEntityEquipItem{
+					eventBase: eventBase{
+						EventId: eventIdEntityEquipItem,
+						At:      time.Now().Unix(),
+						Id:      strconv.FormatUint(p.Id, 10),
+					},
+					PocketType: info.PocketType,
+					ItemId:     info.ItemId,
+					Color1:     fmt.Sprintf("#%06x", info.Color1),
+					Color2:     fmt.Sprintf("#%06x", info.Color2),
+					Color3:     fmt.Sprintf("#%06x", info.Color3),
+					Color5:     fmt.Sprintf("#%06x", info.Color5),
+					Color6:     fmt.Sprintf("#%06x", info.Color6),
+					Color7:     fmt.Sprintf("#%06x", info.Color7),
+				}
+
+				t.publish(e)
+
+				continue
+
+			case opcodeUnequipment:
+				if len(p.Msg) < 1 || p.Msg[0].Type() != packet.MessageElemTypeInt {
+					continue
+				}
+
+				pocketType := p.Msg[0].Data().(uint32)
+
+				if !t.entityCache.hasEquipItem(p.Id, pocketType) {
+					continue
+				}
+
+				t.entityCache.unequipItem(p.Id, pocketType)
+
+				e := &eventEntityUnequipItem{
+					eventBase: eventBase{
+						EventId: eventIdEntityUnequipItem,
+						At:      time.Now().Unix(),
+						Id:      strconv.FormatUint(p.Id, 10),
+					},
+					PocketType: pocketType,
+				}
+
+				t.publish(e)
+
 				continue
 
 			case opcodeSetFinisher:
@@ -486,6 +620,26 @@ func (t *eventPublisher) addClient(ctx context.Context, ch chan<- iEvent) uint32
 				CCId:       cond.CCId,
 				DisableAt:  cond.DisableAt,
 				AttackerId: attackerId,
+			}
+
+			events = append(events, e)
+		}
+
+		for _, item := range entity.equipItemMap {
+			e := &eventEntityEquipItem{
+				eventBase: eventBase{
+					EventId: eventIdEntityEquipItem,
+					At:      now,
+					Id:      strconv.FormatUint(entity.Id, 10),
+				},
+				PocketType: item.PocketType,
+				ItemId:     item.ItemId,
+				Color1:     fmt.Sprintf("#%06x", item.Color1),
+				Color2:     fmt.Sprintf("#%06x", item.Color2),
+				Color3:     fmt.Sprintf("#%06x", item.Color3),
+				Color5:     fmt.Sprintf("#%06x", item.Color5),
+				Color6:     fmt.Sprintf("#%06x", item.Color6),
+				Color7:     fmt.Sprintf("#%06x", item.Color7),
 			}
 
 			events = append(events, e)

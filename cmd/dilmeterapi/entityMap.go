@@ -14,19 +14,15 @@ type entityInfoExtend struct {
 	sync.Mutex
 	appearAt              int64
 	disappearAt           int64
-	characterConditionMap map[uint32]*entityCharacterCondition
-}
-
-type entityCharacterCondition struct {
-	CCId       uint32
-	DisableAt  int64
-	AttackerId uint64
+	characterConditionMap map[uint32]*packet.EntityCharacterCondition
+	equipItemMap          map[uint32]*packet.EntityItem
 }
 
 func (t entityCache) add(p *packet.EntityInfo) {
 	at := time.Now().Unix()
 
 	if e, ok := t[p.Id]; ok {
+		e.EntityInfo = p
 		e.appearAt = at
 		e.disappearAt = 0
 		return
@@ -36,8 +32,10 @@ func (t entityCache) add(p *packet.EntityInfo) {
 		EntityInfo:            p,
 		appearAt:              at,
 		disappearAt:           0,
-		characterConditionMap: make(map[uint32]*entityCharacterCondition),
+		characterConditionMap: make(map[uint32]*packet.EntityCharacterCondition),
+		equipItemMap:          make(map[uint32]*packet.EntityItem),
 	}
+
 	t.cleanup()
 }
 
@@ -66,14 +64,8 @@ func (t entityCache) addCondition(p *packet.CharacterConditionPacket) {
 		return
 	}
 
-	newCond := &entityCharacterCondition{
-		CCId:       p.CCId,
-		DisableAt:  p.DisableAt,
-		AttackerId: p.AttackerId,
-	}
-
 	e.Lock()
-	e.characterConditionMap[p.CCId] = newCond
+	e.characterConditionMap[p.CCId] = &p.EntityCharacterCondition
 	e.Unlock()
 
 	go func() {
@@ -84,6 +76,109 @@ func (t entityCache) addCondition(p *packet.CharacterConditionPacket) {
 		}
 		e.Unlock()
 	}()
+}
+
+// return -> isUpdated
+func (t entityCache) addOrUpdateCondition(id uint64, p *packet.EntityCharacterCondition) bool {
+	e := t[id]
+	if e == nil {
+		return false
+	}
+
+	e.Lock()
+	defer e.Unlock()
+
+	setDisableTimer := func() {
+		time.Sleep(time.Until(time.Unix(p.DisableAt, 0)))
+		e.Lock()
+		if cond := e.characterConditionMap[p.CCId]; cond != nil && cond.DisableAt == p.DisableAt {
+			delete(e.characterConditionMap, p.CCId)
+		}
+		e.Unlock()
+	}
+
+	if cond := e.characterConditionMap[p.CCId]; cond != nil {
+		isSame := *cond == *p
+		if isSame {
+			return false
+		}
+
+		*cond = *p
+		go setDisableTimer()
+		return true
+	}
+
+	e.characterConditionMap[p.CCId] = p
+	go setDisableTimer()
+	return true
+}
+
+func (t entityCache) addOrUpdateEquipItem(id uint64, p *packet.EntityItem) bool {
+	e := t[id]
+	if e == nil {
+		return false
+	}
+
+	e.Lock()
+	defer e.Unlock()
+
+	if item := e.equipItemMap[p.PocketType]; item != nil {
+		isSame := *item == *p
+		if isSame {
+			return false
+		}
+
+		*item = *p
+		return true
+	}
+
+	e.equipItemMap[p.PocketType] = p
+	return true
+}
+
+func (t entityCache) hasEquipItem(id uint64, pocketType uint32) bool {
+	e := t[id]
+	if e == nil {
+		return false
+	}
+
+	e.Lock()
+	defer e.Unlock()
+
+	if item := e.equipItemMap[pocketType]; item != nil {
+		return true
+	}
+
+	return false
+}
+
+func (t entityCache) allEquipItemPockets(id uint64) []uint32 {
+	e := t[id]
+	if e == nil {
+		return nil
+	}
+
+	e.Lock()
+	defer e.Unlock()
+
+	var pockets []uint32
+	for k := range e.equipItemMap {
+		pockets = append(pockets, k)
+	}
+
+	return pockets
+}
+
+func (t entityCache) unequipItem(id uint64, pocketType uint32) {
+	e := t[id]
+	if e == nil {
+		return
+	}
+
+	e.Lock()
+	defer e.Unlock()
+
+	delete(e.equipItemMap, pocketType)
 }
 
 func (t entityCache) cleanup() {

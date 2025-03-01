@@ -33,6 +33,7 @@
         <v-tab value="takeDamage">Take Damage</v-tab>
         <v-tab value="applyDamageByEntity">Apply Damage (By Entity)</v-tab>
         <v-tab value="applyDamageBySkill">Apply Damage (By Skill)</v-tab>
+        <v-tab value="entityList">Characters</v-tab>
     </v-tabs>
 
     <v-tabs-window v-model="tab">
@@ -47,6 +48,10 @@
         <v-tabs-window-item value="applyDamageBySkill">
             <apply-damage-by-skill />
         </v-tabs-window-item>
+
+        <v-tabs-window-item value="entityList">
+            <entity-list />
+        </v-tabs-window-item>
     </v-tabs-window>
 </template>
 
@@ -59,6 +64,7 @@ import { eventBase } from "./protocols";
 import TakeDamageComponent from '@/components/takeDamage.vue';
 import ApplyDamageByEntityComponent from '@/components/applyDamageByEntity.vue';
 import ApplyDamageBySkillComponent from '@/components/applyDamageBySkill.vue';
+import EntityListComponent from "./components/entityList.vue";
 
 export default defineComponent({
     name: "App",
@@ -66,6 +72,7 @@ export default defineComponent({
         TakeDamage: TakeDamageComponent,
         ApplyDamageByEntity: ApplyDamageByEntityComponent,
         ApplyDamageBySkill: ApplyDamageBySkillComponent,
+        EntityList: EntityListComponent,
     },
     setup() {
         const isLoading = inject('isLoading');
@@ -76,6 +83,7 @@ export default defineComponent({
         const raceNameMap = inject('raceNameMap');
         const skillNameMap = inject('skillNameMap');
         const condNameMap = inject('condNameMap');
+        const itemNameMap = inject('itemNameMap');
         const actorManager = inject('actorManager');
         const dcManager = inject('dcManager');
 
@@ -236,6 +244,13 @@ export default defineComponent({
 
                 for (const v of list) {
                     condNameMap.value[v.Id] = `${db.value.getCurLangString(v.Name)} ${v.Id}`;
+                }
+            }
+            {
+                const list = await db.value.getSortedListData('ItemList');
+
+                for (const v of list) {
+                    itemNameMap.value[v.Id] = `${db.value.getCurLangString(v.Name)} ${v.Id}`;
                 }
             }
 
