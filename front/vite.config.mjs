@@ -46,4 +46,8 @@ export default defineConfig({
             "brotli-dec-wasm",
         ],
     },
+    build: {
+        sourcemap: true,
+        minify: false,
+    },
 });
