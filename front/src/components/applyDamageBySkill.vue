@@ -111,7 +111,7 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, inject, ref, computed, onUnmounted } from "vue";
+import { defineComponent, inject, ref, computed, onUnmounted, watch } from "vue";
 
 import { getMabiNameColor } from '@/util';
 import { EntityDamage, EntityCondition, ActorManager, BaseActor, GroupActor, EntityActor } from '@/eventActor';
@@ -231,6 +231,18 @@ export default defineComponent({
             list.unshift(['', targetDC.value.totalDamage]);
 
             return list;
+        });
+
+        watch(targetIdList, () => {
+            if (!targetId.value) {
+                return;
+            }
+
+            if (targetIdList.value.find(v => v[0] == targetId.value)) {
+                return;
+            }
+
+            targetId.value = '';
         });
 
         const allApplyDamage = computed(() =>
