@@ -40,10 +40,26 @@ export class ActorManager {
                     }
 
                     const targetEntity = this.entityMap[event_.TargetId];
-                    if (targetEntity) {
-                        targetEntity.onTakeDamage(event_);
-                        targetEntity.group.onTakeDamage(event_);
+                    if (!targetEntity) {
+                        // 유저 정보가 오기전에 대미지가 먼저오는 경우
+                        // @TODO: 추후에 local storage를 사용해 캐싱하는 식으로 변경
+                        this.onEntityAppear({
+                            Id: event_.TargetId,
+                            EventId: 1,
+                            At: Date.now() / 1000,
+                            Name: `unknown:${event_.TargetId}`,
+                            RaceId: 10001,
+                            Height: 1,
+                            Weight: 1,
+                            Upper: 1,
+                            Lower: 1,
+                            GuildName: "",
+                            OwnerId: "",
+                        })
                     }
+
+                    targetEntity.onTakeDamage(event_);
+                    targetEntity.group.onTakeDamage(event_);
                 }
                 break;
 
@@ -103,11 +119,15 @@ export class ActorManager {
         const groupKey = ActorManager.groupTargetKey(event);
         const group = this.groupMap[groupKey] ??= new GroupActor(this, groupKey, RaceId, Name);
 
-        const isNewEntity = !this.entityMap[Id];
+        let entity = this.entityMap[Id];
+        const isNewEntity = !entity;
+        const dummyEntity = entity?.name.startsWith('unknown:');
 
-        if (isNewEntity) {
-            const entity = new EntityActor(this, Id, RaceId, Name, group);
-            this.entityMap[Id] = group.entityMap[Id] = entity;
+        if (isNewEntity || dummyEntity) {
+            if (isNewEntity) {
+                entity = new EntityActor(this, Id, RaceId, Name, group);
+                this.entityMap[Id] = group.entityMap[Id] = entity;
+            }
 
             // entity appear를 받은 뒤에 api가 켜진 경우
             for (const v of this.damages) {
@@ -160,7 +180,7 @@ interface IEventActor {
 }
 
 export abstract class BaseActor implements IEventActor {
-    protected constructor(protected mgr: ActorManager, private _id: string, private _raceId: number, protected _name: string) {
+    protected constructor(protected mgr: ActorManager, private _id: string, protected _raceId: number, protected _name: string) {
         this._isPC = ActorManager.pcRaceSet.has(_raceId);
     }
 
@@ -306,6 +326,8 @@ export class EntityActor extends BaseActor {
     }
 
     public override onEntityAppear(event: protocols.eventEntityAppear): void {
+        this._name = event.Name;
+        this._raceId = event.RaceId;
         this._finisherId = '';
         this._guildName = event.GuildName;
         this._ownerId = event.OwnerId;
@@ -439,6 +461,10 @@ export class GroupActor extends BaseActor {
     }
 
     public override onEntityAppear(event: protocols.eventEntityAppear): void {
+        this._name = ActorManager.pcRaceSet.has(event.RaceId)
+            ? event.Name : `${event.RaceId}`;
+        this._raceId = event.RaceId;
+
         if (ActorManager.pcRaceSet.has(event.RaceId)) {
             // pc일 경우 damage 초기와 안함
             return;
