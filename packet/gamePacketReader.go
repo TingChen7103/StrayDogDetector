@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -39,6 +38,11 @@ type GameServerPacketReaderOpt struct {
 	ClientIp string
 }
 
+type gamePacketPayload struct {
+	relSeq uint32
+	data   []byte
+}
+
 const pcapQueueSize = 100
 const pcapBufferSize = 32 * 1024 * 1024
 const pcapPromisc = true
@@ -69,7 +73,7 @@ func NewGameServerPacketReader(opt *GameServerPacketReaderOpt) (*GameServerPacke
 		return nil, err
 	}
 
-	payloadCh := (<-chan []byte)(nil)
+	payloadCh := (<-chan gamePacketPayload)(nil)
 	err := error(nil)
 	if opt.FileName != "" {
 		payloadCh, err = v.openFile(opt.FileName, filter)
@@ -90,17 +94,38 @@ func NewGameServerPacketReader(opt *GameServerPacketReaderOpt) (*GameServerPacke
 	return v, nil
 }
 
-func (t *GameServerPacketReader) packetLoop(payloadCh <-chan []byte) {
+func (t *GameServerPacketReader) packetLoop(payloadCh <-chan gamePacketPayload) {
 
 	buffer := bytes.NewBuffer(nil)
+	lastRelSeq := uint32(0)
+	payloads := make([]gamePacketPayload, 0, 100)
+
+	skipPayload := func(n int) {
+		for n > 0 {
+			if n < len(payloads[0].data) {
+				lastRelSeq = payloads[0].relSeq
+				payloads[0].data = payloads[0].data[n:]
+				return
+			}
+
+			n -= len(payloads[0].data)
+			payloads = payloads[1:]
+		}
+	}
 
 	for {
 		select {
 		case <-t.ctx.Done():
 			return
 
-		case payload := <-payloadCh:
-			buffer.Write(payload)
+		case payloadData := <-payloadCh:
+			if buffer.Len() < 1 {
+				buffer.Reset()
+			}
+
+			lastRelSeq = payloadData.relSeq
+			buffer.Write(payloadData.data)
+			payloads = append(payloads, payloadData)
 		}
 
 	readerLoop:
@@ -111,19 +136,33 @@ func (t *GameServerPacketReader) packetLoop(payloadCh <-chan []byte) {
 					break readerLoop
 				}
 
-				logger.Printf("game packet parse error %v", err)
+				logger.Printf("game packet parse error %v %v", lastRelSeq, err)
+				buffer.Reset()
+				if len(payloads) > 0 {
+					payloads = payloads[1:]
+				}
+
+				if len(payloads) > 0 {
+					for _, v := range payloads {
+						buffer.Write(v.data)
+					}
+
+					lastRelSeq = payloads[0].relSeq
+				}
+
 				continue
 			}
 
 			if msg != nil {
 				// logger.Println("game packet", msg.Op, msg.Id, len(msg.Msg))
 				t.packetCh <- msg
+				skipPayload(len(msg.RawPacket))
 			}
 		}
 	}
 }
 
-func (t *GameServerPacketReader) openNic(nic string, filter string) (<-chan []byte, error) {
+func (t *GameServerPacketReader) openNic(nic string, filter string) (<-chan gamePacketPayload, error) {
 	handle, err := pcap.OpenLive(nic, pcapBufferSize, pcapPromisc, pcap.BlockForever)
 	if err != nil {
 		logger.Println(err)
@@ -135,7 +174,7 @@ func (t *GameServerPacketReader) openNic(nic string, filter string) (<-chan []by
 		return nil, err
 	}
 
-	ch := make(chan []byte, pcapQueueSize)
+	ch := make(chan gamePacketPayload, pcapQueueSize)
 	// ps := gopacket.NewPacketSource(handle, handle.LinkType())
 
 	go t.readPacketLoop(ch)
@@ -143,7 +182,7 @@ func (t *GameServerPacketReader) openNic(nic string, filter string) (<-chan []by
 	return ch, nil
 }
 
-func (t *GameServerPacketReader) openFile(file string, filter string) (<-chan []byte, error) {
+func (t *GameServerPacketReader) openFile(file string, filter string) (<-chan gamePacketPayload, error) {
 	fd, err := os.OpenFile(file, os.O_RDONLY, 0644)
 	if err != nil {
 		logger.Println(err)
@@ -171,7 +210,7 @@ func (t *GameServerPacketReader) openFile(file string, filter string) (<-chan []
 
 	t.handle = handle
 
-	ch := make(chan []byte, pcapQueueSize)
+	ch := make(chan gamePacketPayload, pcapQueueSize)
 
 	time.AfterFunc(20*time.Second, func() {
 		logger.Println("start readPacketLoop", file)
@@ -202,7 +241,7 @@ func (t *GameServerPacketReader) openLog() error {
 	return nil
 }
 
-func (t *GameServerPacketReader) readPacketLoop(ch chan<- []byte) {
+func (t *GameServerPacketReader) readPacketLoop(ch chan<- gamePacketPayload) {
 	ethLayer := layers.Ethernet{}
 	ip4Layer := layers.IPv4{}
 	tcpLayer := layers.TCP{}
@@ -212,13 +251,14 @@ func (t *GameServerPacketReader) readPacketLoop(ch chan<- []byte) {
 	packetLayers := []gopacket.LayerType(nil)
 
 	// 패킷 순서 섞이는 것 땜빵
+	baseSeq := uint32(0)
 	nextSeq, prevDstPort := uint32(0), layers.TCPPort(0)
 	pendingTcpLayers := make([]layers.TCP, 0, packetQueueSize)
 
 	for i := 0; t.ctx.Err() == nil; i++ {
 		b, ci, err := t.handle.ReadPacketData()
 		if err != nil {
-			logger.Println(err)
+			logger.Println(err, i)
 			break
 		}
 
@@ -232,6 +272,10 @@ func (t *GameServerPacketReader) readPacketLoop(ch chan<- []byte) {
 			continue
 		}
 
+		if i == 0 {
+			baseSeq = tcpLayer.Seq
+		}
+
 		for _, layer := range packetLayers {
 			if layer != layers.LayerTypeTCP || len(tcpLayer.Payload) < 1 {
 				continue
@@ -241,15 +285,29 @@ func (t *GameServerPacketReader) readPacketLoop(ch chan<- []byte) {
 				// connection이 바뀐 경우 (채널 이동등)
 				if prevDstPort != tcpLayer.DstPort {
 					for _, v := range pendingTcpLayers {
-						ch <- v.Payload
+						ch <- gamePacketPayload{
+							relSeq: v.Seq - baseSeq,
+							data:   v.Payload,
+						}
 					}
 
 					pendingTcpLayers = pendingTcpLayers[:0]
 					prevDstPort = tcpLayer.DstPort
 
-					ch <- tcpLayer.Payload
+					baseSeq = tcpLayer.Seq
 					nextSeq = tcpLayer.Seq + uint32(len(tcpLayer.Payload))
-					break
+
+					if len(tcpLayer.Payload) == 4 {
+						// crypt key
+						continue
+					}
+
+					ch <- gamePacketPayload{
+						relSeq: tcpLayer.Seq - baseSeq,
+						data:   tcpLayer.Payload,
+					}
+
+					continue
 				}
 
 				// align 틀어짐
@@ -260,32 +318,44 @@ func (t *GameServerPacketReader) readPacketLoop(ch chan<- []byte) {
 						// 겹치는 부분 버려서 해결이 되는 경우
 						payload := tcpLayer.Payload[nextSeq-tcpLayer.Seq:]
 						if len(payload) > 0 {
-							ch <- payload
+							ch <- gamePacketPayload{
+								relSeq: nextSeq - baseSeq,
+								data:   payload,
+							}
 						}
 
 						nextSeq = tcpLayer.Seq + uint32(len(tcpLayer.Payload))
-						break
+						continue
 					}
 				}
 
-				if len(pendingTcpLayers) == packetQueueSize {
+				if len(pendingTcpLayers) >= packetQueueSize {
 					// 꽉 찬 경우 보류 목록을 보내고 비워버림
 					for _, v := range pendingTcpLayers {
-						ch <- v.Payload
+						ch <- gamePacketPayload{
+							relSeq: v.Seq - baseSeq,
+							data:   v.Payload,
+						}
 					}
 
 					pendingTcpLayers = pendingTcpLayers[:0]
 
-					ch <- tcpLayer.Payload
+					ch <- gamePacketPayload{
+						relSeq: tcpLayer.Seq - baseSeq,
+						data:   tcpLayer.Payload,
+					}
 					nextSeq = tcpLayer.Seq + uint32(len(tcpLayer.Payload))
-					break
+					continue
 				}
 
 				pendingTcpLayers = append(pendingTcpLayers, tcpLayer)
-				break
+				continue
 			}
 
-			ch <- tcpLayer.Payload
+			ch <- gamePacketPayload{
+				relSeq: tcpLayer.Seq - baseSeq,
+				data:   tcpLayer.Payload,
+			}
 			nextSeq = tcpLayer.Seq + uint32(len(tcpLayer.Payload))
 			prevDstPort = tcpLayer.DstPort
 
@@ -298,7 +368,10 @@ func (t *GameServerPacketReader) readPacketLoop(ch chan<- []byte) {
 
 				for _, v := range pendingTcpLayers {
 					if v.Seq == nextSeq {
-						ch <- v.Payload
+						ch <- gamePacketPayload{
+							relSeq: v.Seq - baseSeq,
+							data:   v.Payload,
+						}
 						nextSeq = v.Seq + uint32(len(v.Payload))
 						pendingTcpLayers = pendingTcpLayers[1:]
 						continue
@@ -315,7 +388,10 @@ func (t *GameServerPacketReader) readPacketLoop(ch chan<- []byte) {
 						// 겹치는 부분 버림
 						payload = payload[nextSeq-v.Seq:]
 						if len(payload) > 0 {
-							ch <- payload
+							ch <- gamePacketPayload{
+								relSeq: nextSeq - baseSeq,
+								data:   payload,
+							}
 						}
 
 						nextSeq = v.Seq + uint32(len(v.Payload))
@@ -328,11 +404,18 @@ func (t *GameServerPacketReader) readPacketLoop(ch chan<- []byte) {
 				}
 			}
 
-			break
+			continue
 		}
 
 		if i&((1<<10)-1) == 0 {
 			time.Sleep(5 * time.Millisecond)
+		}
+	}
+
+	for _, v := range pendingTcpLayers {
+		ch <- gamePacketPayload{
+			relSeq: v.Seq - baseSeq,
+			data:   v.Payload,
 		}
 	}
 }
@@ -382,9 +465,13 @@ func gamePacketReader(buffer *bytes.Buffer) (*GamePacket, error) {
 
 	// ?
 	if length == 0 || length > 0x100_0000 {
-		buffer.Reset()
-		logger.Println("warning packet miss-align")
-		return nil, nil
+		err := fmt.Errorf("invalid packet length %v", length)
+		return nil, err
+	}
+
+	if flag > 4 {
+		err := fmt.Errorf("invalid flag %v", flag)
+		return nil, err
 	}
 
 	isShortPacket := flag == 1 || // heartbeat
@@ -440,11 +527,21 @@ func gamePacketReader(buffer *bytes.Buffer) (*GamePacket, error) {
 	body = body[8:]
 
 	_, lenbytes := binary.Uvarint(body)
+	if lenbytes <= 0 {
+		err := fmt.Errorf("invalid message length %v", lenbytes)
+		return nil, err
+	}
+
+	if len(body) < lenbytes {
+		err := fmt.Errorf("invalid message length %v %v", len(body), lenbytes)
+		return nil, err
+	}
+
 	body = body[lenbytes:]
 
 	msg, err := NewMessage(bytes.NewReader(body))
 	if err != nil {
-		logger.Println("gameProxy packetHeader body read error", err, "\n", hex.Dump(body))
+		logger.Println("gameProxy packetHeader body read error", err)
 		return nil, err
 	}
 
