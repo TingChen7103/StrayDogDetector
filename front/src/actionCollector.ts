@@ -1,5 +1,4 @@
-import { customRef } from 'vue';
-
+import { CustomReactive, IUpdateCallback } from '@/util';
 import { EntityDamage } from '@/eventActor';
 
 // TODO: cc 추가
@@ -365,28 +364,4 @@ class DamageEventTarget extends EventTarget implements IDamageEventTarget {
         super.removeEventListener(type, listener, options);
         this._count--;
     }
-}
-
-
-interface IUpdateCallback {
-    setUpdateCallback(track: () => void, trigger: () => void): void;
-}
-
-function CustomReactive<T extends IUpdateCallback>(value: T): T {
-    const state = customRef<T>((track, trigger) => {
-        value.setUpdateCallback(track, trigger);
-
-        return {
-            get() {
-                track();
-                return value;
-            },
-            set(newValue: T) {
-                value = newValue;
-                trigger();
-            },
-        };
-    });
-
-    return state.value;
 }

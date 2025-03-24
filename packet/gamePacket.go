@@ -3,11 +3,13 @@ package packet
 import (
 	"log"
 	"os"
+	"time"
 )
 
 var logger = log.New(os.Stdout, "packet ", log.LstdFlags|log.Lshortfile)
 
 type GamePacket struct {
+	At     time.Time
 	Sign   uint8
 	Length uint32
 	Flag   uint8

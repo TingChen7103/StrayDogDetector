@@ -7,7 +7,6 @@ import (
 	"math"
 	"strconv"
 	"sync"
-	"time"
 
 	"gitlab.com/prilus/mabidilmeter/packet"
 )
@@ -96,10 +95,10 @@ func (t *eventPublisher) loop() {
 				}
 
 				t.Lock()
-				t.entityCache.add(entity)
+				t.entityCache.add(entity, p.At)
 				t.Unlock()
 
-				e := toEventEntityAppear(time.Now().Unix(), entity)
+				e := toEventEntityAppear(p.At.Unix(), entity)
 
 				t.publish(e)
 
@@ -116,7 +115,7 @@ func (t *eventPublisher) loop() {
 					e := &eventCharacterConditionEnable{
 						eventBase: eventBase{
 							EventId: eventIdCharacterConditionEnable,
-							At:      time.Now().Unix(),
+							At:      p.At.Unix(),
 							Id:      strconv.FormatUint(entity.Id, 10),
 						},
 						CCId:       v.CCId,
@@ -135,7 +134,7 @@ func (t *eventPublisher) loop() {
 					e := &eventEntityEquipItem{
 						eventBase: eventBase{
 							EventId: eventIdEntityEquipItem,
-							At:      time.Now().Unix(),
+							At:      p.At.Unix(),
 							Id:      strconv.FormatUint(entity.Id, 10),
 						},
 						PocketType: v.PocketType,
@@ -161,7 +160,7 @@ func (t *eventPublisher) loop() {
 					e := &eventEntityUnequipItem{
 						eventBase: eventBase{
 							EventId: eventIdEntityUnequipItem,
-							At:      time.Now().Unix(),
+							At:      p.At.Unix(),
 							Id:      strconv.FormatUint(entity.Id, 10),
 						},
 						PocketType: pocketType,
@@ -181,13 +180,13 @@ func (t *eventPublisher) loop() {
 				id := p.Msg[0].Data().(uint64)
 
 				t.Lock()
-				t.entityCache.disappear(id)
+				t.entityCache.disappear(id, p.At)
 				t.Unlock()
 
 				e := &eventEntityDisappear{
 					eventBase: eventBase{
 						EventId: eventIdEntityDisappear,
-						At:      time.Now().Unix(),
+						At:      p.At.Unix(),
 						Id:      strconv.FormatUint(id, 10),
 					},
 				}
@@ -213,7 +212,7 @@ func (t *eventPublisher) loop() {
 				e := &eventEntityUpdateBody{
 					eventBase: eventBase{
 						EventId: eventIdEntityUpdateBody,
-						At:      time.Now().Unix(),
+						At:      p.At.Unix(),
 						Id:      strconv.FormatUint(p.Id, 10),
 					},
 					Height: height,
@@ -233,7 +232,6 @@ func (t *eventPublisher) loop() {
 					continue
 				}
 
-				now := time.Now().Unix()
 				for _, entity := range entities {
 					if len(entity.Name) <= 0 || entity.Name[0] == '_' {
 						// ignore npc
@@ -241,10 +239,10 @@ func (t *eventPublisher) loop() {
 					}
 
 					t.Lock()
-					t.entityCache.add(entity)
+					t.entityCache.add(entity, p.At)
 					t.Unlock()
 
-					e := toEventEntityAppear(now, entity)
+					e := toEventEntityAppear(p.At.Unix(), entity)
 
 					t.publish(e)
 				}
@@ -259,7 +257,7 @@ func (t *eventPublisher) loop() {
 				count := int(p.Msg[0].Data().(uint16))
 				msg := p.Msg[1:]
 
-				now := time.Now().Unix()
+				now := p.At.Unix()
 				for i := 0; i < count; i++ {
 					// ttype, id, unk1 (if ttype == 16)
 					if len(msg) < 2 ||
@@ -279,7 +277,7 @@ func (t *eventPublisher) loop() {
 					id := msg[1].Data().(uint64)
 
 					t.Lock()
-					t.entityCache.disappear(id)
+					t.entityCache.disappear(id, p.At)
 					t.Unlock()
 
 					e := &eventEntityDisappear{
@@ -319,7 +317,7 @@ func (t *eventPublisher) loop() {
 				e := &eventEntityEquipItem{
 					eventBase: eventBase{
 						EventId: eventIdEntityEquipItem,
-						At:      time.Now().Unix(),
+						At:      p.At.Unix(),
 						Id:      strconv.FormatUint(p.Id, 10),
 					},
 					PocketType: info.PocketType,
@@ -352,7 +350,7 @@ func (t *eventPublisher) loop() {
 				e := &eventEntityUnequipItem{
 					eventBase: eventBase{
 						EventId: eventIdEntityUnequipItem,
-						At:      time.Now().Unix(),
+						At:      p.At.Unix(),
 						Id:      strconv.FormatUint(p.Id, 10),
 					},
 					PocketType: pocketType,
@@ -378,7 +376,7 @@ func (t *eventPublisher) loop() {
 				e := &eventFinish{
 					eventBase: eventBase{
 						EventId: eventIdFinish,
-						At:      time.Now().Unix(),
+						At:      p.At.Unix(),
 						Id:      strconv.FormatUint(p.Id, 10),
 					},
 					AttackerId: attackerIdStr,
@@ -435,7 +433,7 @@ func (t *eventPublisher) loop() {
 					e := &eventDamage{
 						eventBase: eventBase{
 							EventId: eventIdDamage,
-							At:      time.Now().Unix(),
+							At:      p.At.Unix(),
 							Id:      strconv.FormatUint(attackerId, 10),
 						},
 						TargetId:   strconv.FormatUint(targetId, 10),
@@ -513,7 +511,7 @@ func (t *eventPublisher) loop() {
 				e := &eventDamage{
 					eventBase: eventBase{
 						EventId: eventIdDamage,
-						At:      time.Now().Unix(),
+						At:      p.At.Unix(),
 						Id:      strconv.FormatUint(attackerId, 10),
 					},
 					TargetId: strconv.FormatUint(targetId, 10),
@@ -540,7 +538,7 @@ func (t *eventPublisher) loop() {
 					e := &eventCharacterConditionDisable{
 						eventBase: eventBase{
 							EventId: eventIdCharacterConditionDisable,
-							At:      time.Now().Unix(),
+							At:      p.At.Unix(),
 							Id:      strconv.FormatUint(cond.Id, 10),
 						},
 						CCId: cond.CCId,
@@ -557,7 +555,7 @@ func (t *eventPublisher) loop() {
 				e := &eventCharacterConditionEnable{
 					eventBase: eventBase{
 						EventId: eventIdCharacterConditionEnable,
-						At:      time.Now().Unix(),
+						At:      p.At.Unix(),
 						Id:      strconv.FormatUint(cond.Id, 10),
 					},
 					CCId:       cond.CCId,
@@ -608,13 +606,12 @@ func (t *eventPublisher) addClient(ctx context.Context, ch chan<- iEvent) uint32
 	clientId := t.currentClientId
 	t.Unlock()
 
-	now := time.Now().Unix()
 	// bulk write 필요할듯
 	events := []iEvent(nil)
 
 	t.Lock()
 	for _, entity := range t.entityCache {
-		e := toEventEntityAppear(now, entity.EntityInfo)
+		e := toEventEntityAppear(entity.appearAt, entity.EntityInfo)
 
 		events = append(events, e)
 
@@ -627,7 +624,7 @@ func (t *eventPublisher) addClient(ctx context.Context, ch chan<- iEvent) uint32
 			e := &eventCharacterConditionEnable{
 				eventBase: eventBase{
 					EventId: eventIdCharacterConditionEnable,
-					At:      now,
+					At:      entity.appearAt,
 					Id:      strconv.FormatUint(entity.Id, 10),
 				},
 				CCId:       cond.CCId,
@@ -642,7 +639,7 @@ func (t *eventPublisher) addClient(ctx context.Context, ch chan<- iEvent) uint32
 			e := &eventEntityEquipItem{
 				eventBase: eventBase{
 					EventId: eventIdEntityEquipItem,
-					At:      now,
+					At:      entity.appearAt,
 					Id:      strconv.FormatUint(entity.Id, 10),
 				},
 				PocketType: item.PocketType,

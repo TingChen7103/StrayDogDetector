@@ -138,7 +138,7 @@ func run(ctx context.Context, nicName string, fileName string) {
 		wsCtx, wsCtxCancel := context.WithCancel(ws.Request().Context())
 
 		// 생각보다 websocket이 send queue 비워지는게 느리다
-		ch := make(chan iEvent, 10000)
+		ch := make(chan iEvent, 1000000)
 		defer wsCtxCancel()
 		defer close(ch)
 
@@ -181,7 +181,6 @@ func run(ctx context.Context, nicName string, fileName string) {
 				return
 
 			case e := <-ch:
-				ws.SetWriteDeadline(time.Now().Add(3 * time.Second))
 				err := websocket.JSON.Send(ws, e)
 				if err != nil {
 					logger.Printf("Can't send: %s", err.Error())

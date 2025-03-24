@@ -1,4 +1,7 @@
 <template>
+    <v-sheet>
+        <div ref="chartDom" style="width: 100svw; height: 300px;"></div>
+    </v-sheet>
     <v-select v-model="targetId" :items="targetIdList"
         :item-title="vv => `${vv[0] ? prettyEntityName(entityMap[vv[0]]?.actor) : 'all'} ${vv[1]?.toFixed(0)}`"
         :item-value="vv => vv[0]" class="ma-2" variant="outlined" density="compact" hide-details>
@@ -9,8 +12,9 @@
             <v-expansion-panel>
                 <v-expansion-panel-title>
                     <v-sheet>
-                        {{ prettyEntityName(v.actor) }} {{ v.totalDamage.toFixed(0) }} {{ (100 * v.totalDamage / allApplyDamage).toFixed(1) }}%
-                    </v-sheet>
+                        {{ prettyEntityName(v.actor) }} {{ v.totalDamage.toFixed(0) }} {{ (100 * v.totalDamage /
+                            allApplyDamage).toFixed(1) }}% dps {{ v.damages.length < 2 ? 0 : Math.round(v.totalDamage /
+                            (v.damages[v.damages.length - 1].At - v.damages[0].At)) }} </v-sheet>
 
                 </v-expansion-panel-title>
                 <v-expansion-panel-text class="pa-3">
@@ -111,7 +115,8 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, inject, ref, computed, onUnmounted, watch } from "vue";
+import { defineComponent, inject, ref, computed, onUnmounted, watch, onMounted } from "vue";
+import highcharts, { Options, SeriesAreaOptions } from 'highcharts';
 
 import { getMabiNameColor } from '@/util';
 import { EntityDamage, EntityCondition, ActorManager, BaseActor, GroupActor, EntityActor } from '@/eventActor';
@@ -128,6 +133,10 @@ export default defineComponent({
         const dcManager = inject('dcManager');
 
         const damageCollectorMap: Record<string, DamageCollectorBase> = {};
+        const chartDom = ref<HTMLElement>(undefined!);
+        let chart: Highcharts.Chart = undefined!;
+
+        const chartData = computed(() => getChartSeriesData(pcEntities.value.filter(v => v.totalDamage > 10000)));
 
         onUnmounted(() => {
             for (const v of Object.values(damageCollectorMap)) {
@@ -194,24 +203,20 @@ export default defineComponent({
         });
 
         const entityMapWithTargetData = computed(() => {
-            const m: Record<string, {
-                actor: EntityActor,
-                dc: DualGroupedDamageCollector,
-                totalDamage: number,
-                groupedTotalDamages: Record<string, number>,
-                groupedDamages: Record<string, EntityDamage[]>,
-            }> = {};
+            const m: Record<string, EntityExtended> = {};
 
             for (const k in entityMap.value) {
                 const v = entityMap.value[k];
 
                 const totalDamage = targetId.value ? v.dc.groupedTotalDamages[targetId.value] || 0 : v.dc.totalDamage;
+                const damages = targetId.value ? v.dc.groupedDamages[targetId.value] || [] : v.dc.damages;
                 const groupedTotalDamages = targetId.value ? v.dc.dualGroupedTotalDamages[targetId.value] : v.dc.grouped2TotalDamages;
                 const groupedDamages = targetId.value ? v.dc.dualGroupedDamages[targetId.value] : v.dc.grouped2Damages;
 
                 m[k] = {
                     ...v,
                     totalDamage,
+                    damages,
                     groupedTotalDamages,
                     groupedDamages,
                 }
@@ -244,6 +249,36 @@ export default defineComponent({
 
             targetId.value = '';
         });
+
+
+        onMounted(() => {
+            let debounced1 = 0;
+            watch(entityMap, () => {
+                if (debounced1) {
+                    return;
+                }
+
+                setTimeout(() => {
+                    debounced1 = 0;
+                    if (chart) {
+                        chart.destroy();
+                    }
+                    chart = highcharts.chart(chartDom.value, { ...chartOpt, series: chartData.value });
+                }, 100);
+            });
+
+            let debounced2: number = 0;
+            watch(chartData, () => {
+                if (debounced2) {
+                    return;
+                }
+
+                debounced2 = setTimeout(() => {
+                    debounced2 = 0;
+                    chart?.update({ series: chartData.value });
+                }, 100);
+            });
+        })
 
         const allApplyDamage = computed(() =>
             pcEntities.value.reduce((acc, v) => acc + v.totalDamage, 0));
@@ -284,10 +319,45 @@ export default defineComponent({
             return entity.name;
         }
 
+        const getChartSeriesData = (entity: EntityExtended[]): SeriesAreaOptions[] => {
+            const series = entity.map((v): SeriesAreaOptions & { data: [number, number][] } => ({
+                type: 'area',
+                name: prettyEntityName(v.actor)!,
+                data: v.damages.reduce((acc, v) => {
+                    const normalizedTime = (v.At - (v.At % 60)) * 1000;
+                    const last = acc[acc.length - 1];
+                    if (last && last[0] == normalizedTime) {
+                        last[1] += v.Damage;
+                        return acc;
+                    }
+
+                    return acc.concat([[normalizedTime, v.Damage + (last?.[1] || 0)]]);
+                }, [] as [number, number][]),
+                stacking: 'normal',
+                dataGrouping: {
+                    enabled: true,
+                    units: [['minute', [1]]],
+                },
+            }));
+
+            for (let i = 0; i < (series[0]?.data.length || 0); i++) {
+                const tickAt = Math.min(...series.map(v => v.data[i]?.[0] || Infinity));
+
+                for (const s of series) {
+                    if (s.data[i]?.[0] != tickAt) {
+                        s.data.splice(i, 0, [tickAt, s.data[i - 1]?.[1] || 0]);
+                    }
+                }
+            }
+
+            return series;
+        };
+
         return {
             isLoading,
             region,
 
+            chartDom,
             pcEntities,
             allApplyDamage,
             targetId,
@@ -310,5 +380,29 @@ export default defineComponent({
         }
     }
 });
+
+type EntityExtended = {
+    actor: EntityActor,
+    dc: DualGroupedDamageCollector,
+    totalDamage: number,
+    damages: EntityDamage[],
+    groupedTotalDamages: Record<string, number>,
+    groupedDamages: Record<string, EntityDamage[]>,
+};
+
+const chartOpt: Options = {
+    lang: {
+        locale: 'en',
+    },
+    title: { text: '' },
+    chart: {
+        zooming: { type: 'x' },
+    },
+    xAxis: { type: 'datetime' },
+    yAxis: { title: { text: '' } },
+    tooltip: {
+        valueDecimals: 0,
+    },
+};
 
 </script>

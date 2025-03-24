@@ -1,3 +1,4 @@
+import { CustomReactive, IUpdateCallback } from '@/util';
 import { shallowReactive } from 'vue';
 import * as bounds from 'binary-search-bounds';
 
@@ -117,7 +118,7 @@ export class ActorManager {
         const { Id, RaceId, Name } = event;
 
         const groupKey = ActorManager.groupTargetKey(event);
-        const group = this.groupMap[groupKey] ??= new GroupActor(this, groupKey, RaceId, Name);
+        const group = this.groupMap[groupKey] ??= CustomReactive(new GroupActor(this, groupKey, RaceId, Name));
 
         let entity = this.entityMap[Id];
         const isNewEntity = !entity;
@@ -125,7 +126,7 @@ export class ActorManager {
 
         if (isNewEntity || dummyEntity) {
             if (isNewEntity) {
-                entity = new EntityActor(this, Id, RaceId, Name, group);
+                entity = CustomReactive(new EntityActor(this, Id, RaceId, Name, group));
                 this.entityMap[Id] = group.entityMap[Id] = entity;
             }
 
@@ -179,57 +180,71 @@ interface IEventActor {
     clear(): void;
 }
 
-export abstract class BaseActor implements IEventActor {
+export abstract class BaseActor implements IEventActor, IUpdateCallback {
+    protected vueUpdateTrack?: () => void;
+    private vueUpdateTrigger?: () => void;
+    private vueUpdateTimeout = 0;
+    private static vueUpdateTick = 33;
+
     protected constructor(protected mgr: ActorManager, private _id: string, protected _raceId: number, protected _name: string) {
         this._isPC = ActorManager.pcRaceSet.has(_raceId);
     }
 
     public get id() {
+        this.vueUpdateTrack?.();
         return this._id;
     }
 
     public get raceId() {
+        this.vueUpdateTrack?.();
         return this._raceId;
     }
 
     public get name() {
+        this.vueUpdateTrack?.();
         return this._name;
     }
 
-    protected _body: EntityBody = shallowReactive({
+    protected _body: EntityBody = {
         Height: 1,
         Weight: 1,
         Upper: 1,
         Lower: 1,
-    });
+    };
     public get body() {
+        this.vueUpdateTrack?.();
         return this._body;
     }
 
     /** 받은 대미지 */
     public get totalTakeDamage() {
+        this.vueUpdateTrack?.();
         return this._totalTakeDamage;
     }
     protected _totalTakeDamage = 0;
 
     protected _takeDamages: EntityDamage[] = [];
     public get takeDamages() {
+        this.vueUpdateTrack?.();
         return this._takeDamages;
     }
 
     /** 준 대미지 */
     public get totalApplyDamage() {
+        this.vueUpdateTrack?.();
         return this._totalApplyDamage;
     }
     protected _totalApplyDamage = 0;
 
     protected _applyDamages: EntityDamage[] = [];
     public get applyDamages() {
+        this.vueUpdateTrack?.();
         return this._applyDamages;
     }
 
     private _isPC = false;
     public get isPC() {
+        this.vueUpdateTrack?.();
         return this._isPC;
     }
 
@@ -278,6 +293,8 @@ export abstract class BaseActor implements IEventActor {
         this._body.Weight = event.Weight;
         this._body.Upper = event.Upper;
         this._body.Lower = event.Lower;
+
+        this.vueUpdateRequest();
     }
 
     public clear() {
@@ -286,6 +303,26 @@ export abstract class BaseActor implements IEventActor {
 
         this._totalApplyDamage = 0;
         this._applyDamages.length = 0;
+
+        this.vueUpdateRequest();
+    }
+
+    public setUpdateCallback(track: () => void, trigger: () => void): void {
+        this.vueUpdateTrack = track;
+        this.vueUpdateTrigger = trigger;
+    }
+
+    private vueUpdate(): void {
+        this.vueUpdateTimeout = 0;
+        this.vueUpdateTrigger?.();
+    }
+
+    protected vueUpdateRequest(): void {
+        if (this.vueUpdateTimeout) {
+            return;
+        }
+
+        this.vueUpdateTimeout = setTimeout(() => this.vueUpdate(), BaseActor.vueUpdateTick);
     }
 }
 
@@ -296,20 +333,24 @@ export class EntityActor extends BaseActor {
 
     protected _guildName = '';
     public get guildName() {
+        this.vueUpdateTrack?.();
         return this._guildName;
     }
 
     protected _ownerId = '';
     public get ownerId() {
+        this.vueUpdateTrack?.();
         return this._ownerId;
     }
 
     public get group() {
+        this.vueUpdateTrack?.();
         return this._group;
     }
 
-    protected _conditionMap: Record<number, EntityCondition> = shallowReactive({});
+    protected _conditionMap: Record<number, EntityCondition> = {};
     public get conditionMap() {
+        this.vueUpdateTrack?.();
         return this._conditionMap;
     }
 
@@ -317,15 +358,19 @@ export class EntityActor extends BaseActor {
 
     private _finisherId = '';
     public get finisherId() {
+        this.vueUpdateTrack?.();
         return this._finisherId;
     }
 
-    protected _equipItemMap: Record<number, EntityItem> = shallowReactive({});
+    protected _equipItemMap: Record<number, EntityItem> = {};
     public get equipItemMap() {
+        this.vueUpdateTrack?.();
         return this._equipItemMap;
     }
 
     public override onEntityAppear(event: protocols.eventEntityAppear): void {
+        this.vueUpdateRequest();
+
         this._name = event.Name;
         this._raceId = event.RaceId;
         this._finisherId = '';
@@ -346,6 +391,8 @@ export class EntityActor extends BaseActor {
     }
 
     public override onTakeDamage(event: protocols.eventDamage): void {
+        this.vueUpdateRequest();
+
         const attacker = this.mgr.entityMap[event.Id];
 
         const damage: EntityDamage = {
@@ -360,6 +407,8 @@ export class EntityActor extends BaseActor {
     }
 
     public override onApplyDamage(event: protocols.eventDamage): void {
+        this.vueUpdateRequest();
+
         const targetId = event.TargetId;
         const target = this.mgr.entityMap[targetId];
         if (!target || !(target instanceof EntityActor)) {
@@ -382,6 +431,8 @@ export class EntityActor extends BaseActor {
     }
 
     public override onCharacterConditionEnable(event: protocols.eventCharacterConditionEnable): void {
+        this.vueUpdateRequest();
+
         this._conditionMap[event.CCId] = {
             Id: event.Id,
             At: event.At,
@@ -403,6 +454,8 @@ export class EntityActor extends BaseActor {
     }
 
     public override onCharacterConditionDisable(event: protocols.eventCharacterConditionDisable): void {
+        this.vueUpdateRequest();
+
         delete this._conditionMap[event.CCId];
 
         const prev = this._conditionHistory.length ? this._conditionHistory[this._conditionHistory.length - 1].List : [];
@@ -418,17 +471,20 @@ export class EntityActor extends BaseActor {
     }
 
     public override onFinish(event: protocols.eventFinish): void {
+        this.vueUpdateRequest();
+
         this._finisherId = event.AttackerId;
     }
 
     public override onEquipItem(event: protocols.eventEntityEquipItem): void {
-        // this._equipItemMap[event.PocketType] = {
-        //     ...event,
-        // };
+        this.vueUpdateRequest();
+
         this._equipItemMap[event.PocketType] = event;
     }
 
     public override onUnequipItem(event: protocols.eventEntityUnequipItem): void {
+        this.vueUpdateRequest();
+
         delete this._equipItemMap[event.PocketType];
     }
 
@@ -455,12 +511,15 @@ export class GroupActor extends BaseActor {
         super(mgr, id, raceId, groupName);
     }
 
-    private _entityMap: Record<string, EntityActor> = shallowReactive({});
+    private _entityMap: Record<string, EntityActor> = {};
     public get entityMap() {
+        this.vueUpdateTrack?.();
         return this._entityMap;
     }
 
     public override onEntityAppear(event: protocols.eventEntityAppear): void {
+        this.vueUpdateRequest();
+
         this._name = ActorManager.pcRaceSet.has(event.RaceId)
             ? event.Name : `${event.RaceId}`;
         this._raceId = event.RaceId;
@@ -481,6 +540,7 @@ export class GroupActor extends BaseActor {
     }
 
     public override onTakeDamage(event: protocols.eventDamage): void {
+        this.vueUpdateRequest();
         // console.log('group take damage', this.id, event);
 
         const attacker = this.mgr.entityMap[event.Id];

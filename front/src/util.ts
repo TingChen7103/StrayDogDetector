@@ -1,3 +1,5 @@
+import { customRef } from 'vue';
+
 export function getMabiNameColor(name: string): string {
     if (!name?.length) {
         return '#808080';
@@ -23,4 +25,27 @@ export function getMabiNameColor(name: string): string {
     ccolor[2] = colCalc(ccolor[2]);
 
     return '#' + ccolor.map(v => v.toString(16).padStart(2, '0')).join('');
+}
+
+export interface IUpdateCallback {
+    setUpdateCallback(track: () => void, trigger: () => void): void;
+}
+
+export function CustomReactive<T extends IUpdateCallback>(value: T): T {
+    const state = customRef<T>((track, trigger) => {
+        value.setUpdateCallback(track, trigger);
+
+        return {
+            get() {
+                track();
+                return value;
+            },
+            set(newValue: T) {
+                value = newValue;
+                trigger();
+            },
+        };
+    });
+
+    return state.value;
 }

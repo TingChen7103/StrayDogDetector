@@ -18,37 +18,32 @@ type entityInfoExtend struct {
 	equipItemMap          map[uint32]*packet.EntityItem
 }
 
-func (t entityCache) add(p *packet.EntityInfo) {
-	at := time.Now().Unix()
-
+func (t entityCache) add(p *packet.EntityInfo, at time.Time) {
 	if e, ok := t[p.Id]; ok {
 		e.EntityInfo = p
-		e.appearAt = at
+		e.appearAt = at.Unix()
 		e.disappearAt = 0
 		return
 	}
 
 	t[p.Id] = &entityInfoExtend{
 		EntityInfo:            p,
-		appearAt:              at,
+		appearAt:              at.Unix(),
 		disappearAt:           0,
 		characterConditionMap: make(map[uint32]*packet.EntityCharacterCondition),
 		equipItemMap:          make(map[uint32]*packet.EntityItem),
 	}
 
-	t.cleanup()
+	t.cleanup(at)
 }
 
-func (t entityCache) disappear(id uint64) {
-	// at을 외부에서 받아야할 수 도 있음 생각보다 느림
-	at := time.Now().Unix()
-
+func (t entityCache) disappear(id uint64, at time.Time) {
 	e := t[id]
 	if e == nil {
 		return
 	}
 
-	e.disappearAt = at
+	e.disappearAt = at.Unix()
 }
 
 func (t entityCache) addCondition(p *packet.CharacterConditionPacket) {
@@ -68,14 +63,16 @@ func (t entityCache) addCondition(p *packet.CharacterConditionPacket) {
 	e.characterConditionMap[p.CCId] = &p.EntityCharacterCondition
 	e.Unlock()
 
-	go func() {
-		time.Sleep(time.Until(time.Unix(p.DisableAt, 0)))
-		e.Lock()
-		if cond := e.characterConditionMap[p.CCId]; cond != nil && cond.DisableAt == p.DisableAt {
-			delete(e.characterConditionMap, p.CCId)
-		}
-		e.Unlock()
-	}()
+	/*
+		go func() {
+			time.Sleep(time.Until(time.Unix(p.DisableAt, 0)))
+			e.Lock()
+			if cond := e.characterConditionMap[p.CCId]; cond != nil && cond.DisableAt == p.DisableAt {
+				delete(e.characterConditionMap, p.CCId)
+			}
+			e.Unlock()
+		}()
+	*/
 }
 
 // return -> isUpdated
@@ -88,14 +85,16 @@ func (t entityCache) addOrUpdateCondition(id uint64, p *packet.EntityCharacterCo
 	e.Lock()
 	defer e.Unlock()
 
-	setDisableTimer := func() {
-		time.Sleep(time.Until(time.Unix(p.DisableAt, 0)))
-		e.Lock()
-		if cond := e.characterConditionMap[p.CCId]; cond != nil && cond.DisableAt == p.DisableAt {
-			delete(e.characterConditionMap, p.CCId)
+	/*
+		setDisableTimer := func() {
+			time.Sleep(time.Until(time.Unix(p.DisableAt, 0)))
+			e.Lock()
+			if cond := e.characterConditionMap[p.CCId]; cond != nil && cond.DisableAt == p.DisableAt {
+				delete(e.characterConditionMap, p.CCId)
+			}
+			e.Unlock()
 		}
-		e.Unlock()
-	}
+	*/
 
 	if cond := e.characterConditionMap[p.CCId]; cond != nil {
 		isSame := *cond == *p
@@ -104,12 +103,12 @@ func (t entityCache) addOrUpdateCondition(id uint64, p *packet.EntityCharacterCo
 		}
 
 		*cond = *p
-		go setDisableTimer()
+		// go setDisableTimer()
 		return true
 	}
 
 	e.characterConditionMap[p.CCId] = p
-	go setDisableTimer()
+	// go setDisableTimer()
 	return true
 }
 
@@ -196,8 +195,8 @@ func (t entityCache) updateBody(id uint64, height float32, weight float32, upper
 	e.Lower = lower
 }
 
-func (t entityCache) cleanup() {
-	now := time.Now().Unix()
+func (t entityCache) cleanup(at time.Time) {
+	now := at.Unix()
 	mobRemoveSec, userRemoveSec := int64(1*60), int64(5*60)
 	noDisappearMobRemoveSec, noDisappearUserRemoveSec := int64(12*60*60), int64(3*60*60)
 
