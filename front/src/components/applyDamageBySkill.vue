@@ -33,6 +33,8 @@
                                 damage: {{ damageBySkill.toFixed(0) }}
                                 count: {{ v.groupedDamages[+skillId].length }}
                                 avgDamage: {{ (damageBySkill / v.groupedDamages[+skillId].length).toFixed(0) }}
+                                minDamage: {{ v.groupedMinDamages[+skillId].toFixed(0) }}
+                                maxDamage: {{ v.groupedMaxDamages[+skillId].toFixed(0) }}
                                 {{ (100 * damageBySkill / v.totalDamage).toFixed(1) }}%
                             </v-sheet>
 
@@ -212,6 +214,8 @@ export default defineComponent({
                 const damages = targetId.value ? v.dc.groupedDamages[targetId.value] || [] : v.dc.damages;
                 const groupedTotalDamages = targetId.value ? v.dc.dualGroupedTotalDamages[targetId.value] : v.dc.grouped2TotalDamages;
                 const groupedDamages = targetId.value ? v.dc.dualGroupedDamages[targetId.value] : v.dc.grouped2Damages;
+                const groupedMinDamages = targetId.value ? v.dc.dualGroupedMinDamages[targetId.value] : v.dc.grouped2MinDamages;
+                const groupedMaxDamages = targetId.value ? v.dc.dualGroupedMaxDamages[targetId.value] : v.dc.grouped2MaxDamages;
 
                 m[k] = {
                     ...v,
@@ -219,6 +223,8 @@ export default defineComponent({
                     damages,
                     groupedTotalDamages,
                     groupedDamages,
+                    groupedMinDamages,
+                    groupedMaxDamages,
                 }
             }
 
@@ -388,6 +394,8 @@ type EntityExtended = {
     damages: EntityDamage[],
     groupedTotalDamages: Record<string, number>,
     groupedDamages: Record<string, EntityDamage[]>,
+    groupedMinDamages: Record<string, number>,
+    groupedMaxDamages: Record<string, number>,
 };
 
 const chartOpt: Options = {
