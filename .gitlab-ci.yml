@@ -10,8 +10,9 @@ build:
     - cp -r dist/* ../cmd/dilmeterapi/static
     - cd ..
     # api build
-    - GOOS=windows GOARCH=amd64 go build  -ldflags="-s -w" -trimpath ./cmd/dilmeterapi
-    - zip -e -P $ZIP_PASSWORD dilmeterapi.zip dilmeterapi.exe
+    - GOOS=windows GOARCH=amd64 go build  -ldflags="-s -w" -trimpath -o dilmeterapi.exe ./cmd/dilmeterapi
+    - GOOS=windows GOARCH=386 go build  -ldflags="-s -w" -trimpath -o dilmeterapi_x86.exe ./cmd/dilmeterapi
+    - zip -e -P $ZIP_PASSWORD dilmeterapi.zip dilmeterapi.exe dilmeterapi_x86.exe
     # upload artifact to release
     - export DATESTR=$(date +"%Y%m%d-%H%M%S")
     - export RELEASE_FILENAME=dilmeterapi-$DATESTR-${CI_COMMIT_SHA}.zip
