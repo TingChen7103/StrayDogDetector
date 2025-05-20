@@ -34,6 +34,7 @@ export type eventDamage = eventBase & {
     SkillId: number;
     Damage: number;
     IsCritical: boolean;
+    IsDelayed: boolean;
 }
 
 export type eventCharacterConditionEnable = eventBase & {

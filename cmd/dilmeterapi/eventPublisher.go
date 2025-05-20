@@ -514,9 +514,10 @@ func (t *eventPublisher) loop() {
 						At:      p.At.Unix(),
 						Id:      strconv.FormatUint(attackerId, 10),
 					},
-					TargetId: strconv.FormatUint(targetId, 10),
-					SkillId:  attackSkillId,
-					Damage:   float32(damage),
+					TargetId:  strconv.FormatUint(targetId, 10),
+					SkillId:   attackSkillId,
+					Damage:    float32(damage),
+					IsDelayed: true,
 				}
 				t.publish(e)
 

@@ -573,6 +573,7 @@ export type EntityDamage = {
     SkillId: number;
     Damage: number;
     IsCritical: boolean;
+    IsDelayed: boolean;
     Conditions: EntityCondition[];
     TargetConditions: EntityCondition[];
 };

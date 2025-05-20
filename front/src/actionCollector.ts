@@ -146,7 +146,7 @@ export class FilteredDamageCollector extends DamageCollectorBase {
         return this._totalDamage;
     }
     private _totalDamage = 0;
-    
+
     private _minDamage = 0;
     public get minDamage() {
         this.vueUpdateTrack?.();
@@ -159,9 +159,21 @@ export class FilteredDamageCollector extends DamageCollectorBase {
         return this._maxDamage;
     }
 
+    private _count = 0;
+    public get count() {
+        this.vueUpdateTrack?.();
+        return this._count;
+    }
+
     protected override onDamage(p: EntityDamage): void {
         this._damages.push(p);
         this._totalDamage += p.Damage;
+
+        if (p.IsDelayed && !needCountSkill[p.SkillId]) {
+            return;
+        }
+
+        this._count++;
 
         if (this._minDamage === 0 || p.Damage < this._minDamage) {
             this._minDamage = p.Damage;
@@ -175,6 +187,9 @@ export class FilteredDamageCollector extends DamageCollectorBase {
     protected override onClear(): void {
         this._damages.length = 0;
         this._totalDamage = 0;
+        this._minDamage = 0;
+        this._maxDamage = 0;
+        this._count = 0;
     }
 }
 
@@ -195,16 +210,22 @@ export class GroupedDamageCollector extends FilteredDamageCollector {
         return this._groupedTotalDamages;
     }
 
-    private _groupedminDamages: Record<string, number> = {};
+    private _groupedMinDamages: Record<string, number> = {};
     public get groupedMinDamages() {
         this.vueUpdateTrack?.();
-        return this._groupedminDamages;
+        return this._groupedMinDamages;
     }
 
-    private _groupedmaxDamages: Record<string, number> = {};
+    private _groupedMaxDamages: Record<string, number> = {};
     public get groupedMaxDamages() {
         this.vueUpdateTrack?.();
-        return this._groupedmaxDamages;
+        return this._groupedMaxDamages;
+    }
+
+    private _groupedCount: Record<string, number> = {};
+    public get groupedCount() {
+        this.vueUpdateTrack?.();
+        return this._groupedCount;
     }
 
     protected override onDamage(p: EntityDamage): void {
@@ -214,17 +235,24 @@ export class GroupedDamageCollector extends FilteredDamageCollector {
         if (!this._groupedDamages[key]) {
             this._groupedDamages[key] = [];
             this._groupedTotalDamages[key] = 0;
+            this._groupedCount[key] = 0;
         }
 
         this._groupedDamages[key].push(p);
         this._groupedTotalDamages[key] += p.Damage;
 
-        if (!this._groupedminDamages[key] || p.Damage < this._groupedminDamages[key]) {
-            this._groupedminDamages[key] = p.Damage;
+        if (p.IsDelayed && !needCountSkill[p.SkillId]) {
+            return;
         }
 
-        if (p.Damage > (this._groupedmaxDamages[key] ?? 0)) {
-            this._groupedmaxDamages[key] = p.Damage;
+        this._groupedCount[key]++;
+
+        if (!this._groupedMinDamages[key] || p.Damage < this._groupedMinDamages[key]) {
+            this._groupedMinDamages[key] = p.Damage;
+        }
+
+        if (p.Damage > (this._groupedMaxDamages[key] ?? 0)) {
+            this._groupedMaxDamages[key] = p.Damage;
         }
     }
 
@@ -237,6 +265,18 @@ export class GroupedDamageCollector extends FilteredDamageCollector {
 
         for (const k in this._groupedTotalDamages) {
             delete this._groupedTotalDamages[k];
+        }
+
+        for (const k in this._groupedCount) {
+            delete this._groupedCount[k];
+        }
+
+        for (const k in this._groupedMinDamages) {
+            delete this._groupedMinDamages[k];
+        }
+
+        for (const k in this._groupedMaxDamages) {
+            delete this._groupedMaxDamages[k];
         }
     }
 }
@@ -270,6 +310,12 @@ export class DualGroupedDamageCollector extends GroupedDamageCollector {
         return this._grouped2MaxDamages;
     }
 
+    private _grouped2Count: Record<string, number> = {};
+    public get grouped2Count() {
+        this.vueUpdateTrack?.();
+        return this._grouped2Count;
+    }
+
     private _dualGroupedDamages: Record<string, Record<string, EntityDamage[]>> = {};
     public get dualGroupedDamages() {
         this.vueUpdateTrack?.();
@@ -294,6 +340,12 @@ export class DualGroupedDamageCollector extends GroupedDamageCollector {
         return this._dualGroupedMaxDamages;
     }
 
+    private _dualGroupedCount: Record<string, Record<string, number>> = {};
+    public get dualGroupedCount() {
+        this.vueUpdateTrack?.();
+        return this._dualGroupedCount;
+    }
+
     protected override onDamage(p: EntityDamage) {
         super.onDamage(p);
 
@@ -303,10 +355,35 @@ export class DualGroupedDamageCollector extends GroupedDamageCollector {
         if (!this._grouped2Damages[key2]) {
             this._grouped2Damages[key2] = [];
             this._grouped2TotalDamages[key2] = 0;
+            this._grouped2Count[key2] = 0;
         }
 
         this._grouped2Damages[key2].push(p);
         this._grouped2TotalDamages[key2] += p.Damage;
+
+        if (!this._dualGroupedDamages[key1]) {
+            this._dualGroupedDamages[key1] = {};
+            this._dualGroupedTotalDamages[key1] = {};
+            this._dualGroupedMinDamages[key1] = {};
+            this._dualGroupedMaxDamages[key1] = {};
+            this._dualGroupedCount[key1] = {};
+        }
+
+        if (!this._dualGroupedDamages[key1][key2]) {
+            this._dualGroupedDamages[key1][key2] = [];
+            this._dualGroupedTotalDamages[key1][key2] = 0;
+            this._dualGroupedCount[key1][key2] = 0;
+        }
+
+        this._dualGroupedDamages[key1][key2].push(p);
+        this._dualGroupedTotalDamages[key1][key2] += p.Damage;
+        
+        if (p.IsDelayed && !needCountSkill[p.SkillId]) {
+            return;
+        }
+
+        this._grouped2Count[key2]++;
+        this._dualGroupedCount[key1][key2]++;
 
         if (!this._grouped2MinDamages[key2] || p.Damage < this._grouped2MinDamages[key2]) {
             this._grouped2MinDamages[key2] = p.Damage;
@@ -316,18 +393,6 @@ export class DualGroupedDamageCollector extends GroupedDamageCollector {
             this._grouped2MaxDamages[key2] = p.Damage;
         }
 
-        if (!this._dualGroupedDamages[key1]) {
-            this._dualGroupedDamages[key1] = {};
-            this._dualGroupedTotalDamages[key1] = {};
-            this._dualGroupedMinDamages[key1] = {};
-            this._dualGroupedMaxDamages[key1] = {};
-        }
-
-        if (!this._dualGroupedDamages[key1][key2]) {
-            this._dualGroupedDamages[key1][key2] = [];
-            this._dualGroupedTotalDamages[key1][key2] = 0;
-        }
-
         if (!this._dualGroupedMinDamages[key1][key2] || p.Damage < this._dualGroupedMinDamages[key1][key2]) {
             this._dualGroupedMinDamages[key1][key2] = p.Damage;
         }
@@ -335,9 +400,6 @@ export class DualGroupedDamageCollector extends GroupedDamageCollector {
         if (p.Damage > (this._dualGroupedMaxDamages[key1][key2] ?? 0)) {
             this._dualGroupedMaxDamages[key1][key2] = p.Damage;
         }
-
-        this._dualGroupedDamages[key1][key2].push(p);
-        this._dualGroupedTotalDamages[key1][key2] += p.Damage;
     }
 
     protected override onClear() {
@@ -446,4 +508,10 @@ class DamageEventTarget extends EventTarget implements IDamageEventTarget {
         super.removeEventListener(type, listener, options);
         this._count--;
     }
+}
+
+export const needCountSkill: Record<number, boolean> = {
+    58009: true, // 연속 공격
+    58100: true, // 블래스트
+    58101: true, // 플레어
 }

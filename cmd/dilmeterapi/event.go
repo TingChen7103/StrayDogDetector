@@ -50,6 +50,7 @@ type eventDamage struct {
 	SkillId    uint16
 	Damage     float32
 	IsCritical bool
+	IsDelayed  bool
 }
 
 type eventCharacterConditionEnable struct {
