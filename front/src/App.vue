@@ -84,6 +84,7 @@ export default defineComponent({
         const skillNameMap = inject('skillNameMap');
         const condNameMap = inject('condNameMap');
         const itemNameMap = inject('itemNameMap');
+        const appEvent = inject('appEvent');
         const actorManager = inject('actorManager');
         const dcManager = inject('dcManager');
 
@@ -124,6 +125,8 @@ export default defineComponent({
         }
 
         const clearData = () => {
+            appEvent.value.dispatchEvent(new CustomEvent('clear'));
+
             // clear했을 때 서버도 같이 clear하는게 맞을지?
             actorManager.value.clear();
             dcManager.value.clear();

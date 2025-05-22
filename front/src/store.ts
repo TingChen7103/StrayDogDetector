@@ -25,6 +25,7 @@ export const raceNameMap = ref<Record<number, string>>({});
 export const skillNameMap = ref<Record<number, string>>({});
 export const condNameMap = ref<Record<number, string>>({});
 export const itemNameMap = ref<Record<number, string>>({});
+export const appEvent = ref(new EventTarget());
 
 export const dcManager = shallowRef(new DamageCollectorManager());
 export const actorManager = shallowRef(new ActorManager(dcManager.value as DamageCollectorManager));

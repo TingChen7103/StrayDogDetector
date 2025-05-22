@@ -93,6 +93,7 @@ export default defineComponent({
         const region = inject('region');
         const raceNameMap = inject('raceNameMap');
         const skillNameMap = inject('skillNameMap');
+        const appEvent = inject('appEvent');
         const actorManager = inject('actorManager');
         const dcManager = inject('dcManager');
 
@@ -103,6 +104,8 @@ export default defineComponent({
         const chartData = computed(() => getChartSeriesData(pcEntities.value.filter(v => v.totalDamage > 10000)));
 
         onUnmounted(() => {
+            appEvent.value.removeEventListener('clear', clearTarget);
+
             for (const v of Object.values(damageCollectorMap)) {
                 dcManager.value.removeDamageCollector(v);
             }
@@ -208,20 +211,13 @@ export default defineComponent({
             return list;
         });
 
-        watch(targetIdList, () => {
-            if (!targetId.value) {
-                return;
-            }
-
-            if (targetIdList.value.find(v => v[0] == targetId.value)) {
-                return;
-            }
-
+        const clearTarget = () => {
             targetId.value = '';
-        });
-
+        }
 
         onMounted(() => {
+            appEvent.value.addEventListener('clear', clearTarget);
+
             let debounced1 = 0;
             watch(entityMap, () => {
                 if (debounced1) {
