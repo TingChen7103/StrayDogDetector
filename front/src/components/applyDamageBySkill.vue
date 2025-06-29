@@ -32,9 +32,9 @@
                                 {{ skillNameMap[+skillId] || `unknownSkill:${skillId}` }}
                                 damage: {{ damageBySkill.toFixed(0) }}
                                 count: {{ v.groupedCount[+skillId] }}
-                                avgDamage: {{ (damageBySkill / v.groupedCount[+skillId]).toFixed(0) }}
-                                minDamage: {{ v.groupedMinDamages[+skillId].toFixed(0) }}
-                                maxDamage: {{ v.groupedMaxDamages[+skillId].toFixed(0) }}
+                                avgDamage: {{ (v.groupedCount[+skillId] ? damageBySkill / v.groupedCount[+skillId] : 0).toFixed(0) }}
+                                minDamage: {{ v.groupedMinDamages[+skillId]?.toFixed(0) || '0' }}
+                                maxDamage: {{ v.groupedMaxDamages[+skillId]?.toFixed(0) || '0' }}
                                 {{ (100 * damageBySkill / v.totalDamage).toFixed(1) }}%
                             </v-sheet>
 
