@@ -74,10 +74,11 @@ func NewGameServerPacketReader(opt *GameServerPacketReaderOpt) (*GameServerPacke
 		packetCh: make(chan *GamePacket, packetQueueSize),
 	}
 
-	if err := v.openLog(); err != nil {
-		logger.Println("openLog failed", err)
-		return nil, err
-	}
+	// 20251228 Hans: 不產生封包紀錄檔(.pcapng)
+	// if err := v.openLog(); err != nil {
+	// 	logger.Println("openLog failed", err)
+	// 	return nil, err
+	// }
 
 	payloadCh := (<-chan gamePacketPayload)(nil)
 	err := error(nil)

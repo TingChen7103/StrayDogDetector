@@ -218,6 +218,7 @@ export default defineComponent({
         onMounted(() => {
             appEvent.value.addEventListener('clear', clearTarget);
 
+            // 20251228 Hans: 暫時不顯示圖表
             // let debounced1 = 0;
             // watch(entityMap, () => {
             //     if (debounced1) {
