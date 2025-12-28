@@ -9,9 +9,9 @@ import (
 var PCAP_GAMESERVER_FILTER = ""
 
 // kr 기준
-const _GAMESERVER_NET = "211.218.233.0/24"
+const _GAMESERVER_NET = "210.208.80.0/24"
 
-var _GAMESERVER_PORT = []string{"11020", "11021", "11023"}
+var _GAMESERVER_PORT = []string{"11022", "59062"}
 
 func init() {
 	filter := fmt.Sprint("tcp and src net ", _GAMESERVER_NET)

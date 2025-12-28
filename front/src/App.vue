@@ -1,14 +1,22 @@
 <template>
     <v-sheet width="100vw" class="d-flex flex-wrap pl-1 pr-1">
-        <v-sheet width="100svw" class="d-flex">
-            <span style="text-wrap-mode: nowrap;">dilmatulgi, api
+        <v-sheet width="100svw" class="d-flex align-center"> <span style="text-wrap-mode: nowrap;">dilmatulgi, api
                 <span v-if="socketConnected"><v-icon icon="mdi-check" color="success" />connected</span>
                 <span v-else><v-icon icon="mdi-close" color="error" />disconnected</span>
             </span>
             <span>
 
             </span>
-            <v-divider />
+            <v-divider class="mx-2" vertical /> <v-select
+                v-model="lang"
+                :items="langList"
+                label="Lang"
+                density="compact"
+                hide-details
+                class="mr-2" 
+                style="max-width: 100px;"
+            ></v-select>
+
             <v-tooltip>
                 <template v-slot:activator="{ props }">
                     <v-btn @click="loadFromFile" v-bind="props" :loading="isLoading" color="primary" size="small"
@@ -56,11 +64,11 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, onMounted, inject, ref } from "vue";
-
+import { defineComponent, onMounted, inject, ref, watch } from "vue"; // 1. 加入 watch
 import { SocketClient } from '@/socketClient';
 import { eventBase } from "./protocols";
 
+// Component imports...
 import TakeDamageComponent from '@/components/takeDamage.vue';
 import ApplyDamageByEntityComponent from '@/components/applyDamageByEntity.vue';
 import ApplyDamageBySkillComponent from '@/components/applyDamageBySkill.vue';
@@ -77,8 +85,9 @@ export default defineComponent({
     setup() {
         const isLoading = inject('isLoading');
         const region = inject('region');
-        // const lang = inject('lang');
+        const lang = inject('lang');
         const regionList = inject('regionList');
+        const langList = inject('langList');
         const db = inject('db');
         const raceNameMap = inject('raceNameMap');
         const skillNameMap = inject('skillNameMap');
@@ -224,38 +233,66 @@ export default defineComponent({
 
         const tab = ref('');
 
-        onMounted(async () => {
-            regionList.value = ['kr', 'krt', 'cn', 'jp', 'tw', 'us'];
+        const safeGetLang = (nameKey: string) => {
+            try {
+                if (!db.value) return nameKey;
+                const str = db.value.getCurLangString(nameKey);
+                return str ? str : nameKey;
+            } catch (e) {
+                return nameKey;
+            }
+        };
 
+        const reloadDbData = async () => {
+            if (!db.value) return;
+
+            // 當 Store 的 lang 改變，db 會是新的實例，必須重新 tryOpen
+            // tryOpen 內部會根據 lang 去抓對應的翻譯檔
             await db.value.tryOpen();
+            
+            console.log(`[App] Reloading Data... Region: ${region.value}, Lang: ${lang.value}`);
+
+            // 讀取 Race
             {
                 const list = await db.value.getSortedListData('RaceList');
-
                 for (const v of list) {
-                    raceNameMap.value[v.Id] = `${db.value.getCurLangString(v.Name)} ${v.Id}`;
+                    raceNameMap.value[v.Id] = `${safeGetLang(v.Name)} ${v.Id}`;
                 }
             }
+            // 讀取 Skill (最容易爆的地方)
             {
                 const list = await db.value.getSortedListData('SkillList');
-
                 for (const v of list) {
-                    skillNameMap.value[v.Id] = db.value.getCurLangString(v.Name);
+                    skillNameMap.value[v.Id] = safeGetLang(v.Name) || `Skill_${v.Id}`;
                 }
             }
+            // 讀取 Conditions
             {
                 const list = await db.value.getSortedListData('CharCondList');
-
                 for (const v of list) {
-                    condNameMap.value[v.Id] = `${db.value.getCurLangString(v.Name)} ${v.Id}`;
+                    condNameMap.value[v.Id] = `${safeGetLang(v.Name)} ${v.Id}`;
                 }
             }
+            // 讀取 Items
             {
                 const list = await db.value.getSortedListData('ItemList');
-
                 for (const v of list) {
-                    itemNameMap.value[v.Id] = `${db.value.getCurLangString(v.Name)} ${v.Id}`;
+                    itemNameMap.value[v.Id] = `${safeGetLang(v.Name)} ${v.Id}`;
                 }
             }
+        };
+
+        watch(db, async () => {
+            await reloadDbData();
+        });
+
+        onMounted(async () => {
+            // 初始化選單列表
+            regionList.value = ['kr', 'krt', 'cn', 'jp', 'tw', 'us'];
+            langList.value = ['kr', 'krt', 'cn', 'jp', 'tw', 'us'];
+
+            // 初始載入
+            await reloadDbData();
 
             socket.connect();
         });
@@ -263,7 +300,9 @@ export default defineComponent({
         return {
             isLoading,
             region,
-
+            lang,
+            regionList,
+            langList,
             socketConnected,
             clearData,
             download,

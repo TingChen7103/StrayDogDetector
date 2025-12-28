@@ -7,10 +7,12 @@ export const loadingCount = ref(0);
 export const isLoading = computed(() => loadingCount.value > 0);
 
 const defaultRegion = 'kr';
+const defaultLang = 'tw';
 
 export const region = ref(defaultRegion);
-export const lang = ref(defaultRegion);
+export const lang = ref(defaultLang);
 export const regionList = ref([defaultRegion]);
+export const langList = ref([defaultLang]);
 
 export const db = computed(() => {
     const instance = new MabiDB(region.value, lang.value);

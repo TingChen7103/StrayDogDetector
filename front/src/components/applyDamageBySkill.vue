@@ -1,6 +1,6 @@
 <template>
     <v-sheet>
-        <div ref="chartDom" style="width: 100svw; height: 300px;"></div>
+        <!-- <div ref="chartDom" style="width: 100svw; height: 300px;"></div> -->
     </v-sheet>
     <v-select v-model="targetId" :items="targetIdList"
         :item-title="vv => `${vv[0] ? prettyEntityName(entityMap[vv[0]]?.actor) : 'all'} ${vv[1]?.toFixed(0)}`"
@@ -101,7 +101,7 @@ export default defineComponent({
         const chartDom = ref<HTMLElement>(undefined!);
         let chart: Highcharts.Chart = undefined!;
 
-        const chartData = computed(() => getChartSeriesData(pcEntities.value.filter(v => v.totalDamage > 10000)));
+        // const chartData = computed(() => getChartSeriesData(pcEntities.value.filter(v => v.totalDamage > 10000)));
 
         onUnmounted(() => {
             appEvent.value.removeEventListener('clear', clearTarget);
@@ -218,32 +218,32 @@ export default defineComponent({
         onMounted(() => {
             appEvent.value.addEventListener('clear', clearTarget);
 
-            let debounced1 = 0;
-            watch(entityMap, () => {
-                if (debounced1) {
-                    return;
-                }
+            // let debounced1 = 0;
+            // watch(entityMap, () => {
+            //     if (debounced1) {
+            //         return;
+            //     }
 
-                setTimeout(() => {
-                    debounced1 = 0;
-                    if (chart) {
-                        chart.destroy();
-                    }
-                    chart = highcharts.chart(chartDom.value, { ...chartOpt, series: chartData.value });
-                }, 100);
-            });
+            //     setTimeout(() => {
+            //         debounced1 = 0;
+            //         if (chart) {
+            //             chart.destroy();
+            //         }
+            //         chart = highcharts.chart(chartDom.value, { ...chartOpt, series: chartData.value });
+            //     }, 100);
+            // });
 
-            let debounced2: number = 0;
-            watch(chartData, () => {
-                if (debounced2) {
-                    return;
-                }
+            // let debounced2: number = 0;
+            // watch(chartData, () => {
+            //     if (debounced2) {
+            //         return;
+            //     }
 
-                debounced2 = setTimeout(() => {
-                    debounced2 = 0;
-                    chart?.update({ series: chartData.value });
-                }, 100);
-            });
+            //     debounced2 = setTimeout(() => {
+            //         debounced2 = 0;
+            //         chart?.update({ series: chartData.value });
+            //     }, 100);
+            // });
         })
 
         const allApplyDamage = computed(() =>
