@@ -20668,6 +20668,7 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
     let chartStartTime = 0;
     const createOrUpdateChart = (seriesData) => {
       if (!chartDom.value) {
+        console.log("[Chart Debug] chartDom.value is null, cannot draw chart");
         return;
       }
       const chartOpt2 = {
@@ -20676,10 +20677,34 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
           zooming: { type: "x" },
           backgroundColor: "#ffffff"
         },
+        colors: [
+          "#1f77b4",
+          // blue
+          "#ff7f0e",
+          // orange
+          "#2ca02c",
+          // green
+          "#d62728",
+          // red
+          "#9467bd",
+          // purple
+          "#8c564b",
+          // brown
+          "#e377c2",
+          // pink
+          "#7f7f7f",
+          // gray
+          "#bcbd22",
+          // olive
+          "#17becf"
+          // cyan
+        ],
         title: { text: "" },
         xAxis: {
           type: "datetime",
           crosshair: true,
+          lineColor: "#cccccc",
+          tickColor: "#cccccc",
           labels: {
             style: { color: "#333333" },
             formatter: function() {
@@ -20695,7 +20720,9 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
           title: { text: "每秒傷害總和", style: { color: "#333333" } },
           labels: { style: { color: "#333333" } },
           gridLineWidth: 1,
-          gridLineColor: "#e6e6e6"
+          gridLineColor: "#e6e6e6",
+          lineColor: "#cccccc",
+          lineWidth: 1
         },
         tooltip: {
           shared: true,
@@ -20721,32 +20748,46 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
         series: seriesData,
         credits: { enabled: false }
       };
-      if (chart) {
-        chart.destroy();
+      console.log("[Chart Debug] Rendering Highcharts with options:", chartOpt2);
+      try {
+        if (chart) {
+          chart.destroy();
+        }
+        chart = highcharts.chart(chartDom.value, chartOpt2);
+        console.log("[Chart Debug] Highcharts render successful");
+      } catch (err) {
+        console.error("[Chart Debug] Highcharts render failed:", err);
       }
-      chart = highcharts.chart(chartDom.value, chartOpt2);
     };
     const updateChart = () => {
+      console.log("[Chart Debug] updateChart triggered, targetId:", targetId.value);
       if (!targetId.value) {
+        console.log("[Chart Debug] No targetId selected, destroying chart");
         if (chart) {
           chart.destroy();
           chart = void 0;
         }
         return;
       }
-      if (!chartDom.value) return;
+      if (!chartDom.value) {
+        console.log("[Chart Debug] chartDom is not ready, deferring update");
+        return;
+      }
       const activePlayers = pcEntities.value.filter((p2) => p2.totalDamage > 0);
       const allDamages = activePlayers.flatMap((v) => v.damages);
+      console.log("[Chart Debug] Active players count:", activePlayers.length, "Total damages count:", allDamages.length);
       if (allDamages.length === 0) {
+        console.log("[Chart Debug] No damage events found, destroying chart");
         if (chart) {
           chart.destroy();
           chart = void 0;
         }
         return;
       }
-      const tStart = Math.min(...allDamages.map((d) => d.At));
-      const tEnd = Math.max(...allDamages.map((d) => d.At));
+      const tStart = Math.floor(Math.min(...allDamages.map((d) => d.At)));
+      const tEnd = Math.ceil(Math.max(...allDamages.map((d) => d.At)));
       chartStartTime = tStart * 1e3;
+      console.log("[Chart Debug] Combat range (seconds):", tStart, "to", tEnd, "Duration:", tEnd - tStart);
       const seriesData = [];
       for (const p2 of activePlayers) {
         const pDamages = p2.damages.filter((d) => d.Damage > 0);
@@ -20754,12 +20795,13 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
         for (let t = tStart; t <= tEnd; t += 1) {
           let sum = 0;
           for (const d of pDamages) {
-            if (d.At === t) {
+            if (Math.floor(d.At) === t) {
               sum += d.Damage;
             }
           }
           pData.push([t * 1e3, sum]);
         }
+        console.log(`[Chart Debug] Player: ${prettyEntityName(p2.actor)}, Data Points Count:`, pData.length, "Max damage in single point:", Math.max(...pData.map((pt) => pt[1])));
         seriesData.push({
           name: prettyEntityName(p2.actor),
           type: "line",
@@ -37272,4 +37314,4 @@ app.config.errorHandler = (err) => {
   console.error(err);
 };
 app.use(vuetify).mount("#app");
-//# sourceMappingURL=index-Bngx3i4T.js.map
+//# sourceMappingURL=index-BxxDIPje.js.map

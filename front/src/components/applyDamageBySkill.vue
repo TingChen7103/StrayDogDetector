@@ -317,6 +317,7 @@ export default defineComponent({
 
         const createOrUpdateChart = (seriesData: any[]) => {
             if (!chartDom.value) {
+                console.log("[Chart Debug] chartDom.value is null, cannot draw chart");
                 return;
             }
 
@@ -326,10 +327,24 @@ export default defineComponent({
                     zooming: { type: 'x' },
                     backgroundColor: '#ffffff',
                 },
+                colors: [
+                    '#1f77b4', // blue
+                    '#ff7f0e', // orange
+                    '#2ca02c', // green
+                    '#d62728', // red
+                    '#9467bd', // purple
+                    '#8c564b', // brown
+                    '#e377c2', // pink
+                    '#7f7f7f', // gray
+                    '#bcbd22', // olive
+                    '#17becf'  // cyan
+                ],
                 title: { text: '' },
                 xAxis: {
                     type: 'datetime',
                     crosshair: true,
+                    lineColor: '#cccccc',
+                    tickColor: '#cccccc',
                     labels: {
                         style: { color: '#333333' },
                         formatter: function (this: any) {
@@ -346,6 +361,8 @@ export default defineComponent({
                     labels: { style: { color: '#333333' } },
                     gridLineWidth: 1,
                     gridLineColor: '#e6e6e6',
+                    lineColor: '#cccccc',
+                    lineWidth: 1,
                 },
                 tooltip: {
                     shared: true,
@@ -374,15 +391,23 @@ export default defineComponent({
                 credits: { enabled: false },
             };
 
-            if (chart) {
-                chart.destroy();
+            console.log("[Chart Debug] Rendering Highcharts with options:", chartOpt);
+            try {
+                if (chart) {
+                    chart.destroy();
+                }
+                chart = highcharts.chart(chartDom.value, chartOpt);
+                console.log("[Chart Debug] Highcharts render successful");
+            } catch (err) {
+                console.error("[Chart Debug] Highcharts render failed:", err);
             }
-            chart = highcharts.chart(chartDom.value, chartOpt);
         };
 
         const updateChart = () => {
+            console.log("[Chart Debug] updateChart triggered, targetId:", targetId.value);
             // Destroy chart if no targetId is selected (choose 'all')
             if (!targetId.value) {
+                console.log("[Chart Debug] No targetId selected, destroying chart");
                 if (chart) {
                     chart.destroy();
                     chart = undefined!;
@@ -390,12 +415,18 @@ export default defineComponent({
                 return;
             }
 
-            if (!chartDom.value) return;
+            if (!chartDom.value) {
+                console.log("[Chart Debug] chartDom is not ready, deferring update");
+                return;
+            }
 
             // Only display players who participated in attacking the selected target (totalDamage > 0)
             const activePlayers = pcEntities.value.filter(p => p.totalDamage > 0);
             const allDamages = activePlayers.flatMap(v => v.damages);
+            console.log("[Chart Debug] Active players count:", activePlayers.length, "Total damages count:", allDamages.length);
+
             if (allDamages.length === 0) {
+                console.log("[Chart Debug] No damage events found, destroying chart");
                 if (chart) {
                     chart.destroy();
                     chart = undefined!;
@@ -403,9 +434,11 @@ export default defineComponent({
                 return;
             }
 
-            const tStart = Math.min(...allDamages.map(d => d.At));
-            const tEnd = Math.max(...allDamages.map(d => d.At));
+            // Discretize time to integers using floor/ceil to avoid decimal mismatch in exact matching
+            const tStart = Math.floor(Math.min(...allDamages.map(d => d.At)));
+            const tEnd = Math.ceil(Math.max(...allDamages.map(d => d.At)));
             chartStartTime = tStart * 1000;
+            console.log("[Chart Debug] Combat range (seconds):", tStart, "to", tEnd, "Duration:", tEnd - tStart);
 
             const seriesData: any[] = [];
 
@@ -416,12 +449,14 @@ export default defineComponent({
                 for (let t = tStart; t <= tEnd; t += 1) {
                     let sum = 0;
                     for (const d of pDamages) {
-                        if (d.At === t) {
+                        if (Math.floor(d.At) === t) {
                             sum += d.Damage;
                         }
                     }
                     pData.push([t * 1000, sum]);
                 }
+
+                console.log(`[Chart Debug] Player: ${prettyEntityName(p.actor)}, Data Points Count:`, pData.length, "Max damage in single point:", Math.max(...pData.map(pt => pt[1])));
 
                 seriesData.push({
                     name: prettyEntityName(p.actor)!,
