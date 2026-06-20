@@ -1,14 +1,15 @@
 <template>
-    <v-sheet>
-        <!-- <div ref="chartDom" style="width: 100svw; height: 300px;"></div> -->
-    </v-sheet>
-    <div class="d-flex ma-2 ga-2 align-center">
+    <v-card v-if="targetId" class="ma-2 pa-2 bg-white" variant="outlined">
+        <div ref="chartDom" style="width: 100%; height: 350px;"></div>
+    </v-card>
+
+    <div class="d-flex ma-2 ga-2 align-center flex-wrap">
         <v-select v-model="targetId" :items="targetIdList"
             :item-title="vv => `${vv[0] ? prettyEntityName(entityMap[vv[0]]?.actor) : 'all'} ${vv[1]?.toFixed(0)}`"
-            :item-value="vv => vv[0]" variant="outlined" density="compact" hide-details style="max-width: 65%;">
+            :item-value="vv => vv[0]" variant="outlined" density="compact" hide-details style="max-width: 250px; min-width: 120px;">
         </v-select>
         <v-text-field v-model.number="activeDpsBuffer" type="number" min="0" label="活躍DPS緩衝 (秒)"
-            variant="outlined" density="compact" hide-details style="max-width: 35%;">
+            variant="outlined" density="compact" hide-details style="max-width: 150px; min-width: 100px;">
             <template v-slot:append-inner>
                 <v-tooltip location="bottom" max-width="300">
                     <template v-slot:activator="{ props }">
@@ -18,6 +19,8 @@
                 </v-tooltip>
             </template>
         </v-text-field>
+        <v-switch v-model="showBuffCoverage" label="顯示 Buff 覆蓋率" color="primary" density="compact" hide-details class="ml-2"></v-switch>
+        <v-switch v-model="showDebuffCoverage" label="顯示 Debuff 覆蓋率" color="error" density="compact" hide-details class="ml-2"></v-switch>
     </div>
 
     <v-expansion-panels multiple v-for="v in pcEntities" v-bind:key="v.actor.id">
@@ -46,13 +49,23 @@
                             <!-- 이름 -->
                             <v-sheet width="100%"
                                 @click.stop="showEntityDetailDamageList(v.actor.id, targetId, +skillId)">
-                                {{ skillNameMap[+skillId] || `unknownSkill:${skillId}` }}
-                                damage: {{ damageBySkill.toFixed(0) }}
-                                count: {{ v.groupedCount[+skillId] }}
-                                avgDamage: {{ (v.groupedCount[+skillId] ? damageBySkill / v.groupedCount[+skillId] : 0).toFixed(0) }}
-                                minDamage: {{ v.groupedMinDamages[+skillId]?.toFixed(0) || '0' }}
-                                maxDamage: {{ v.groupedMaxDamages[+skillId]?.toFixed(0) || '0' }}
-                                {{ (100 * damageBySkill / v.totalDamage).toFixed(1) }}%
+                                <div>
+                                    {{ skillNameMap[+skillId] || `unknownSkill:${skillId}` }}
+                                    damage: {{ damageBySkill.toFixed(0) }}
+                                    count: {{ v.groupedCount[+skillId] }}
+                                    avgDamage: {{ (v.groupedCount[+skillId] ? damageBySkill / v.groupedCount[+skillId] : 0).toFixed(0) }}
+                                    minDamage: {{ v.groupedMinDamages[+skillId]?.toFixed(0) || '0' }}
+                                    maxDamage: {{ v.groupedMaxDamages[+skillId]?.toFixed(0) || '0' }}
+                                    {{ (100 * damageBySkill / v.totalDamage).toFixed(1) }}%
+                                </div>
+                                <div v-if="(showBuffCoverage || showDebuffCoverage) && getSkillConditionCoverage(v.groupedDamages[skillId], showBuffCoverage, showDebuffCoverage).length > 0" 
+                                    class="d-flex flex-wrap align-center mt-1" style="gap: 8px;">
+                                    <div v-for="c in getSkillConditionCoverage(v.groupedDamages[skillId], showBuffCoverage, showDebuffCoverage)" 
+                                        v-bind:key="c.ccId" class="d-flex align-center bg-grey-darken-4 px-1 rounded text-caption" style="gap: 4px; border: 1px solid #444;">
+                                        <img width="16" height="16" :src="`/res/characterconditionimage/${region}/${c.ccId}/${c.ccId}.png`" />
+                                        <span>{{ condNameMap[c.ccId] || `CC:${c.ccId}` }}: <b>{{ c.percentage.toFixed(1) }}%</b></span>
+                                    </div>
+                                </div>
                             </v-sheet>
 
                             <!-- 막대 -->
@@ -113,6 +126,7 @@ export default defineComponent({
         const appEvent = inject('appEvent');
         const actorManager = inject('actorManager');
         const dcManager = inject('dcManager');
+        const condNameMap = inject('condNameMap');
 
         const damageCollectorMap: Record<string, DamageCollectorBase> = {};
         const chartDom = ref<HTMLElement>(undefined!);
@@ -259,6 +273,176 @@ export default defineComponent({
             const sumDamage = validDamages.reduce((sum, d) => sum + d.Damage, 0);
             return activeTime > 0 ? Math.round(sumDamage / activeTime) : 0;
         };
+
+        const showBuffCoverage = ref(false);
+        const showDebuffCoverage = ref(false);
+
+        const getSkillConditionCoverage = (damages: EntityDamage[] | undefined, showBuff: boolean, showDebuff: boolean) => {
+            if (!damages || damages.length === 0 || (!showBuff && !showDebuff)) {
+                return [];
+            }
+
+            const ccCountMap: Record<number, number> = {};
+            const total = damages.length;
+
+            for (const d of damages) {
+                const checkedCCs = new Set<number>();
+                if (showBuff && d.Conditions) {
+                    for (const c of d.Conditions) {
+                        checkedCCs.add(c.CCId);
+                    }
+                }
+                if (showDebuff && d.TargetConditions) {
+                    for (const c of d.TargetConditions) {
+                        checkedCCs.add(c.CCId);
+                    }
+                }
+                for (const ccId of checkedCCs) {
+                    ccCountMap[ccId] = (ccCountMap[ccId] || 0) + 1;
+                }
+            }
+
+            return Object.entries(ccCountMap)
+                .map(([ccIdStr, count]) => {
+                    const ccId = +ccIdStr;
+                    return {
+                        ccId,
+                        percentage: (count / total) * 100,
+                    };
+                })
+                .sort((a, b) => b.percentage - a.percentage);
+        };
+
+        let chartStartTime = 0;
+
+        const createOrUpdateChart = (seriesData: any[]) => {
+            if (!chartDom.value) {
+                return;
+            }
+
+            const chartOpt: Options = {
+                chart: {
+                    type: 'line',
+                    zooming: { type: 'x' },
+                    backgroundColor: '#ffffff',
+                },
+                title: { text: '' },
+                xAxis: {
+                    type: 'datetime',
+                    crosshair: true,
+                    labels: {
+                        style: { color: '#333333' },
+                        formatter: function (this: any) {
+                            const diff = this.value - chartStartTime;
+                            const sec = Math.floor(diff / 1000);
+                            const m = Math.floor(sec / 60);
+                            const s = sec % 60;
+                            return `${m}:${s < 10 ? '0' : ''}${s}`;
+                        }
+                    }
+                },
+                yAxis: {
+                    title: { text: '每秒傷害總和', style: { color: '#333333' } },
+                    labels: { style: { color: '#333333' } },
+                    gridLineWidth: 1,
+                    gridLineColor: '#e6e6e6',
+                },
+                tooltip: {
+                    shared: true,
+                    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                    style: {
+                        color: '#333333',
+                    },
+                    formatter: function (this: any) {
+                        const diff = this.x - chartStartTime;
+                        const sec = Math.floor(diff / 1000);
+                        const m = Math.floor(sec / 60);
+                        const s = sec % 60;
+                        let tooltipText = `<span style="color:#333;font-weight:bold;">時間: ${m}:${s < 10 ? '0' : ''}${s}</span><br/>`;
+
+                        this.points.forEach((point: any) => {
+                            tooltipText += `<span style="color:${point.color}">●</span> ${point.series.name}: <b>${point.y.toLocaleString()} 傷害</b><br/>`;
+                        });
+
+                        return tooltipText;
+                    }
+                },
+                legend: {
+                    itemStyle: { color: '#333333' }
+                },
+                series: seriesData,
+                credits: { enabled: false },
+            };
+
+            if (chart) {
+                chart.destroy();
+            }
+            chart = highcharts.chart(chartDom.value, chartOpt);
+        };
+
+        const updateChart = () => {
+            // Destroy chart if no targetId is selected (choose 'all')
+            if (!targetId.value) {
+                if (chart) {
+                    chart.destroy();
+                    chart = undefined!;
+                }
+                return;
+            }
+
+            if (!chartDom.value) return;
+
+            // Only display players who participated in attacking the selected target (totalDamage > 0)
+            const activePlayers = pcEntities.value.filter(p => p.totalDamage > 0);
+            const allDamages = activePlayers.flatMap(v => v.damages);
+            if (allDamages.length === 0) {
+                if (chart) {
+                    chart.destroy();
+                    chart = undefined!;
+                }
+                return;
+            }
+
+            const tStart = Math.min(...allDamages.map(d => d.At));
+            const tEnd = Math.max(...allDamages.map(d => d.At));
+            chartStartTime = tStart * 1000;
+
+            const seriesData: any[] = [];
+
+            for (const p of activePlayers) {
+                const pDamages = p.damages.filter(d => d.Damage > 0);
+                const pData: [number, number][] = [];
+
+                for (let t = tStart; t <= tEnd; t += 1) {
+                    let sum = 0;
+                    for (const d of pDamages) {
+                        if (d.At === t) {
+                            sum += d.Damage;
+                        }
+                    }
+                    pData.push([t * 1000, sum]);
+                }
+
+                seriesData.push({
+                    name: prettyEntityName(p.actor)!,
+                    type: 'line',
+                    data: pData,
+                });
+            }
+
+            createOrUpdateChart(seriesData);
+        };
+
+        let debouncedUpdateTimer = 0;
+        const triggerChartUpdate = () => {
+            if (debouncedUpdateTimer) {
+                clearTimeout(debouncedUpdateTimer);
+            }
+            debouncedUpdateTimer = setTimeout(() => {
+                debouncedUpdateTimer = 0;
+                updateChart();
+            }, 300);
+        };
         const targetIdList = computed(() => {
             const list = Object.entries(targetDC.value.groupedTotalDamages)
                 .sort(([, av], [, bv]) => bv - av);
@@ -275,33 +459,11 @@ export default defineComponent({
         onMounted(() => {
             appEvent.value.addEventListener('clear', clearTarget);
 
-            // 20251228 Hans: 暫時不顯示圖表
-            // let debounced1 = 0;
-            // watch(entityMap, () => {
-            //     if (debounced1) {
-            //         return;
-            //     }
+            watch([pcEntities, targetId], () => {
+                triggerChartUpdate();
+            }, { deep: true });
 
-            //     setTimeout(() => {
-            //         debounced1 = 0;
-            //         if (chart) {
-            //             chart.destroy();
-            //         }
-            //         chart = highcharts.chart(chartDom.value, { ...chartOpt, series: chartData.value });
-            //     }, 100);
-            // });
-
-            // let debounced2: number = 0;
-            // watch(chartData, () => {
-            //     if (debounced2) {
-            //         return;
-            //     }
-
-            //     debounced2 = setTimeout(() => {
-            //         debounced2 = 0;
-            //         chart?.update({ series: chartData.value });
-            //     }, 100);
-            // });
+            triggerChartUpdate();
         })
 
         const allApplyDamage = computed(() =>
@@ -378,6 +540,10 @@ export default defineComponent({
             targetIdList,
             activeDpsBuffer,
             calculateActiveDps,
+            showBuffCoverage,
+            showDebuffCoverage,
+            getSkillConditionCoverage,
+            condNameMap,
             detailDialog,
             detailDialogData,
 

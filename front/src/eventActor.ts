@@ -355,6 +355,10 @@ export class EntityActor extends BaseActor {
     }
 
     protected _conditionHistory: EntityConditionState[] = [];
+    public get conditionHistory() {
+        this.vueUpdateTrack?.();
+        return this._conditionHistory;
+    }
 
     private _finisherId = '';
     public get finisherId() {
