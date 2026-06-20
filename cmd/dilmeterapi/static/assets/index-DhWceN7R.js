@@ -20667,6 +20667,20 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
       const sumDamage = validDamages.reduce((sum, d) => sum + d.Damage, 0);
       return activeTime > 0 ? Math.round(sumDamage / activeTime) : 0;
     };
+    const calculateCriticalRate = (damages) => {
+      if (!damages || damages.length === 0) {
+        return "0.00%";
+      }
+      const excludedSkills = [58100, 58101, 58102, 50434, 58103, 58104, 58009];
+      const filteredDamages = damages.filter((d) => !excludedSkills.includes(d.SkillId));
+      if (filteredDamages.length === 0) {
+        return "0.00%";
+      }
+      const criticalHits = filteredDamages.filter((d) => d.IsCritical).length;
+      const totalHits = filteredDamages.length;
+      const rate = criticalHits / totalHits * 100;
+      return `${rate.toFixed(2)}%`;
+    };
     const showBuffCoverage = ref(false);
     const showDebuffCoverage = ref(false);
     const getSkillConditionCoverage = (damages, showBuff, showDebuff) => {
@@ -20798,6 +20812,7 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
       targetIdList,
       activeDpsBuffer,
       calculateActiveDps,
+      calculateCriticalRate,
       showBuffCoverage,
       showDebuffCoverage,
       getSkillConditionCoverage,
@@ -25424,13 +25439,14 @@ const _hoisted_5 = { class: "text-primary" };
 const _hoisted_6 = { class: "font-weight-bold" };
 const _hoisted_7 = { class: "text-grey" };
 const _hoisted_8 = { class: "text-primary font-weight-bold" };
-const _hoisted_9 = ["src"];
-const _hoisted_10 = {
+const _hoisted_9 = { class: "text-deep-orange font-weight-bold" };
+const _hoisted_10 = ["src"];
+const _hoisted_11 = {
   key: 0,
   class: "d-flex flex-wrap align-center mt-1",
   style: { "gap": "8px" }
 };
-const _hoisted_11 = ["src"];
+const _hoisted_12 = ["src"];
 function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
   const _component_damage_list = resolveComponent("damage-list");
   return openBlock(), createElementBlock(Fragment, null, [
@@ -25557,7 +25573,12 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
                           vertical: "",
                           class: "mx-1"
                         }),
-                        createBaseVNode("span", _hoisted_8, "活躍DPS: " + toDisplayString(_ctx.calculateActiveDps(v.damages, _ctx.activeDpsBuffer)), 1)
+                        createBaseVNode("span", _hoisted_8, "活躍DPS: " + toDisplayString(_ctx.calculateActiveDps(v.damages, _ctx.activeDpsBuffer)), 1),
+                        createVNode(VDivider, {
+                          vertical: "",
+                          class: "mx-1"
+                        }),
+                        createBaseVNode("span", _hoisted_9, "暴擊率: " + toDisplayString(_ctx.calculateCriticalRate(v.damages)), 1)
                       ]),
                       _: 2
                     }, 1024)
@@ -25581,7 +25602,7 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
                                 width: "32",
                                 height: "32",
                                 src: `/res/skillimage/${_ctx.region}/${skillId}/${skillId}.png`
-                              }, null, 8, _hoisted_9)
+                              }, null, 8, _hoisted_10)
                             ]),
                             _: 2
                           }, 1024),
@@ -25598,7 +25619,7 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
                                   var _a, _b;
                                   return [
                                     createBaseVNode("div", null, toDisplayString(_ctx.skillNameMap[+skillId] || `unknownSkill:${skillId}`) + " damage: " + toDisplayString(damageBySkill.toFixed(0)) + " count: " + toDisplayString(v.groupedCount[+skillId]) + " avgDamage: " + toDisplayString((v.groupedCount[+skillId] ? damageBySkill / v.groupedCount[+skillId] : 0).toFixed(0)) + " minDamage: " + toDisplayString(((_a = v.groupedMinDamages[+skillId]) == null ? void 0 : _a.toFixed(0)) || "0") + " maxDamage: " + toDisplayString(((_b = v.groupedMaxDamages[+skillId]) == null ? void 0 : _b.toFixed(0)) || "0") + " " + toDisplayString((100 * damageBySkill / v.totalDamage).toFixed(1)) + "% ", 1),
-                                    (_ctx.showBuffCoverage || _ctx.showDebuffCoverage) && _ctx.getSkillConditionCoverage(v.groupedDamages[skillId], _ctx.showBuffCoverage, _ctx.showDebuffCoverage).length > 0 ? (openBlock(), createElementBlock("div", _hoisted_10, [
+                                    (_ctx.showBuffCoverage || _ctx.showDebuffCoverage) && _ctx.getSkillConditionCoverage(v.groupedDamages[skillId], _ctx.showBuffCoverage, _ctx.showDebuffCoverage).length > 0 ? (openBlock(), createElementBlock("div", _hoisted_11, [
                                       (openBlock(true), createElementBlock(Fragment, null, renderList(_ctx.getSkillConditionCoverage(v.groupedDamages[skillId], _ctx.showBuffCoverage, _ctx.showDebuffCoverage), (c) => {
                                         return openBlock(), createElementBlock("div", {
                                           key: c.ccId,
@@ -25609,7 +25630,7 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
                                             width: "16",
                                             height: "16",
                                             src: `/res/characterconditionimage/${_ctx.region}/${c.ccId}/${c.ccId}.png`
-                                          }, null, 8, _hoisted_11),
+                                          }, null, 8, _hoisted_12),
                                           createBaseVNode("span", null, [
                                             createTextVNode(toDisplayString(_ctx.condNameMap[c.ccId] || `CC:${c.ccId}`) + ": ", 1),
                                             createBaseVNode("b", null, toDisplayString(c.percentage.toFixed(1)) + "%", 1)
@@ -37306,4 +37327,4 @@ app.config.errorHandler = (err) => {
   console.error(err);
 };
 app.use(vuetify).mount("#app");
-//# sourceMappingURL=index-D7fb-mgn.js.map
+//# sourceMappingURL=index-DhWceN7R.js.map

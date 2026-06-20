@@ -41,6 +41,8 @@
                         <span>整體DPS: {{ v.damages.length < 2 ? 0 : Math.round(v.totalDamage / (v.damages[v.damages.length - 1].At - v.damages[0].At)) }}</span>
                         <v-divider vertical class="mx-1"></v-divider>
                         <span class="text-primary font-weight-bold">活躍DPS: {{ calculateActiveDps(v.damages, activeDpsBuffer) }}</span>
+                        <v-divider vertical class="mx-1"></v-divider>
+                        <span class="text-deep-orange font-weight-bold">暴擊率: {{ calculateCriticalRate(v.damages) }}</span>
                     </v-sheet>
                 </v-expansion-panel-title>
                 <v-expansion-panel-text class="pa-3">
@@ -317,6 +319,22 @@ export default defineComponent({
             return activeTime > 0 ? Math.round(sumDamage / activeTime) : 0;
         };
 
+        const calculateCriticalRate = (damages: EntityDamage[]): string => {
+            if (!damages || damages.length === 0) {
+                return '0.00%';
+            }
+            // 排除無暴擊設定的技能: 爆破(58100), 閃焰(58101), 疾風(58102, 50434), 追逐者(58103), 籠罩(58104), 連續攻擊(58009)
+            const excludedSkills = [58100, 58101, 58102, 50434, 58103, 58104, 58009];
+            const filteredDamages = damages.filter(d => !excludedSkills.includes(d.SkillId));
+            if (filteredDamages.length === 0) {
+                return '0.00%';
+            }
+            const criticalHits = filteredDamages.filter(d => d.IsCritical).length;
+            const totalHits = filteredDamages.length;
+            const rate = (criticalHits / totalHits) * 100;
+            return `${rate.toFixed(2)}%`;
+        };
+
         const showBuffCoverage = ref(false);
         const showDebuffCoverage = ref(false);
 
@@ -483,6 +501,7 @@ export default defineComponent({
             targetIdList,
             activeDpsBuffer,
             calculateActiveDps,
+            calculateCriticalRate,
             showBuffCoverage,
             showDebuffCoverage,
             getSkillConditionCoverage,
