@@ -20527,6 +20527,12 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
     const damageCollectorMap = {};
     const chartDom = ref(void 0);
     let chart = void 0;
+    const chartData = computed(() => {
+      if (!targetId.value) {
+        return [];
+      }
+      return getChartSeriesData(pcEntities.value.filter((v) => v.totalDamage > 1e4));
+    });
     onUnmounted(() => {
       appEvent2.value.removeEventListener("clear", clearTarget);
       for (const v of Object.values(damageCollectorMap)) {
@@ -20601,6 +20607,40 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
       return m;
     });
     const pcEntities = computed(() => Object.values(entityMapWithTargetData.value).filter((v) => v.actor.isPC).sort((a, b) => b.totalDamage - a.totalDamage));
+    const combatTimeRange = computed(() => {
+      if (!targetId.value) {
+        return { start: 0, end: 0, duration: 0 };
+      }
+      const dmgs = targetDC.value.groupedDamages[targetId.value] || [];
+      if (dmgs.length === 0) {
+        return { start: 0, end: 0, duration: 0 };
+      }
+      const validDmgs = dmgs.filter((d) => d.Damage > 0);
+      if (validDmgs.length === 0) {
+        return { start: 0, end: 0, duration: 0 };
+      }
+      const times = validDmgs.map((d) => d.At);
+      const start = Math.min(...times);
+      const end = Math.max(...times);
+      return { start, end, duration: end - start };
+    });
+    const formatDuration = (seconds) => {
+      const s = Math.ceil(seconds);
+      const m = Math.floor(s / 60);
+      const remainingS = s % 60;
+      return `${m}:${remainingS < 10 ? "0" : ""}${remainingS}`;
+    };
+    const currentTargetDuration = computed(() => {
+      if (!targetId.value) {
+        return "0:00";
+      }
+      const start = combatTimeRange.value.start;
+      const end = combatTimeRange.value.end;
+      if (start === 0 || end === 0) {
+        return "0:00";
+      }
+      return formatDuration(end - start);
+    });
     const targetId = ref("");
     const activeDpsBuffer = ref(10);
     const calculateActiveDps = (damages, buffer) => {
@@ -20665,161 +20705,6 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
         };
       }).sort((a, b) => b.percentage - a.percentage);
     };
-    let chartStartTime = 0;
-    const createOrUpdateChart = (seriesData) => {
-      if (!chartDom.value) {
-        console.log("[Chart Debug] chartDom.value is null, cannot draw chart");
-        return;
-      }
-      const chartOpt2 = {
-        chart: {
-          type: "line",
-          zooming: { type: "x" },
-          backgroundColor: "#ffffff"
-        },
-        colors: [
-          "#1f77b4",
-          // blue
-          "#ff7f0e",
-          // orange
-          "#2ca02c",
-          // green
-          "#d62728",
-          // red
-          "#9467bd",
-          // purple
-          "#8c564b",
-          // brown
-          "#e377c2",
-          // pink
-          "#7f7f7f",
-          // gray
-          "#bcbd22",
-          // olive
-          "#17becf"
-          // cyan
-        ],
-        title: { text: "" },
-        xAxis: {
-          type: "datetime",
-          crosshair: true,
-          lineColor: "#cccccc",
-          tickColor: "#cccccc",
-          labels: {
-            style: { color: "#333333" },
-            formatter: function() {
-              const diff = this.value - chartStartTime;
-              const sec = Math.floor(diff / 1e3);
-              const m = Math.floor(sec / 60);
-              const s = sec % 60;
-              return `${m}:${s < 10 ? "0" : ""}${s}`;
-            }
-          }
-        },
-        yAxis: {
-          title: { text: "每秒傷害總和", style: { color: "#333333" } },
-          labels: { style: { color: "#333333" } },
-          gridLineWidth: 1,
-          gridLineColor: "#e6e6e6",
-          lineColor: "#cccccc",
-          lineWidth: 1
-        },
-        tooltip: {
-          shared: true,
-          backgroundColor: "rgba(255, 255, 255, 0.95)",
-          style: {
-            color: "#333333"
-          },
-          formatter: function() {
-            const diff = this.x - chartStartTime;
-            const sec = Math.floor(diff / 1e3);
-            const m = Math.floor(sec / 60);
-            const s = sec % 60;
-            let tooltipText = `<span style="color:#333;font-weight:bold;">時間: ${m}:${s < 10 ? "0" : ""}${s}</span><br/>`;
-            this.points.forEach((point) => {
-              tooltipText += `<span style="color:${point.color}">●</span> ${point.series.name}: <b>${point.y.toLocaleString()} 傷害</b><br/>`;
-            });
-            return tooltipText;
-          }
-        },
-        legend: {
-          itemStyle: { color: "#333333" }
-        },
-        series: seriesData,
-        credits: { enabled: false }
-      };
-      console.log("[Chart Debug] Rendering Highcharts with options:", chartOpt2);
-      try {
-        if (chart) {
-          chart.destroy();
-        }
-        chart = highcharts.chart(chartDom.value, chartOpt2);
-        console.log("[Chart Debug] Highcharts render successful");
-      } catch (err) {
-        console.error("[Chart Debug] Highcharts render failed:", err);
-      }
-    };
-    const updateChart = () => {
-      console.log("[Chart Debug] updateChart triggered, targetId:", targetId.value);
-      if (!targetId.value) {
-        console.log("[Chart Debug] No targetId selected, destroying chart");
-        if (chart) {
-          chart.destroy();
-          chart = void 0;
-        }
-        return;
-      }
-      if (!chartDom.value) {
-        console.log("[Chart Debug] chartDom is not ready, deferring update");
-        return;
-      }
-      const activePlayers = pcEntities.value.filter((p2) => p2.totalDamage > 0);
-      const allDamages = activePlayers.flatMap((v) => v.damages);
-      console.log("[Chart Debug] Active players count:", activePlayers.length, "Total damages count:", allDamages.length);
-      if (allDamages.length === 0) {
-        console.log("[Chart Debug] No damage events found, destroying chart");
-        if (chart) {
-          chart.destroy();
-          chart = void 0;
-        }
-        return;
-      }
-      const tStart = Math.floor(Math.min(...allDamages.map((d) => d.At)));
-      const tEnd = Math.ceil(Math.max(...allDamages.map((d) => d.At)));
-      chartStartTime = tStart * 1e3;
-      console.log("[Chart Debug] Combat range (seconds):", tStart, "to", tEnd, "Duration:", tEnd - tStart);
-      const seriesData = [];
-      for (const p2 of activePlayers) {
-        const pDamages = p2.damages.filter((d) => d.Damage > 0);
-        const pData = [];
-        for (let t = tStart; t <= tEnd; t += 1) {
-          let sum = 0;
-          for (const d of pDamages) {
-            if (Math.floor(d.At) === t) {
-              sum += d.Damage;
-            }
-          }
-          pData.push([t * 1e3, sum]);
-        }
-        console.log(`[Chart Debug] Player: ${prettyEntityName(p2.actor)}, Data Points Count:`, pData.length, "Max damage in single point:", Math.max(...pData.map((pt) => pt[1])));
-        seriesData.push({
-          name: prettyEntityName(p2.actor),
-          type: "line",
-          data: pData
-        });
-      }
-      createOrUpdateChart(seriesData);
-    };
-    let debouncedUpdateTimer = 0;
-    const triggerChartUpdate = () => {
-      if (debouncedUpdateTimer) {
-        clearTimeout(debouncedUpdateTimer);
-      }
-      debouncedUpdateTimer = setTimeout(() => {
-        debouncedUpdateTimer = 0;
-        updateChart();
-      }, 300);
-    };
     const targetIdList = computed(() => {
       const list = Object.entries(targetDC.value.groupedTotalDamages).sort(([, av], [, bv]) => bv - av);
       list.unshift(["", targetDC.value.totalDamage]);
@@ -20830,10 +20715,50 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
     };
     onMounted(() => {
       appEvent2.value.addEventListener("clear", clearTarget);
-      watch([pcEntities, targetId], () => {
-        triggerChartUpdate();
-      }, { deep: true });
-      triggerChartUpdate();
+      let debounced1 = 0;
+      watch(entityMap, () => {
+        if (debounced1) {
+          return;
+        }
+        setTimeout(() => {
+          debounced1 = 0;
+          if (chart) {
+            chart.destroy();
+            chart = void 0;
+          }
+          if (targetId.value && chartDom.value) {
+            chart = highcharts.chart(chartDom.value, { ...chartOpt, series: chartData.value });
+          }
+        }, 100);
+      });
+      let debounced2 = 0;
+      watch(chartData, () => {
+        if (debounced2) {
+          return;
+        }
+        debounced2 = setTimeout(() => {
+          debounced2 = 0;
+          if (targetId.value && chart) {
+            chart.update({ series: chartData.value });
+          }
+        }, 100);
+      });
+      watch(targetId, (newVal) => {
+        if (!newVal) {
+          if (chart) {
+            chart.destroy();
+            chart = void 0;
+          }
+        } else {
+          setTimeout(() => {
+            if (!chart && chartDom.value) {
+              chart = highcharts.chart(chartDom.value, { ...chartOpt, series: chartData.value });
+            } else if (chart) {
+              chart.update({ series: chartData.value });
+            }
+          }, 100);
+        }
+      });
     });
     const allApplyDamage = computed(() => pcEntities.value.reduce((acc, v) => acc + v.totalDamage, 0));
     const detailDialog = ref(false);
@@ -20853,6 +20778,48 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
         return `${raceName} (${entity.name.slice(-4)})`;
       }
       return entity.name;
+    };
+    const getChartSeriesData = (entity) => {
+      const start = combatTimeRange.value.start;
+      const series = entity.map((v) => ({
+        type: "area",
+        name: prettyEntityName(v.actor),
+        data: v.damages.reduce((acc, v2) => {
+          const relativeSec = Math.floor(v2.At - start);
+          const normalizedTime = (Math.floor(relativeSec / 60) + 1) * 60 * 1e3;
+          const last = acc[acc.length - 1];
+          if (last && last[0] == normalizedTime) {
+            last[1] += v2.Damage;
+            return acc;
+          }
+          return acc.concat([[normalizedTime, v2.Damage + ((last == null ? void 0 : last[1]) || 0)]]);
+        }, [[0, 0]]),
+        stacking: "normal",
+        dataGrouping: {
+          enabled: true,
+          units: [["minute", [1]]]
+        }
+      }));
+      const allTicksSet = /* @__PURE__ */ new Set();
+      for (const s of series) {
+        for (const pt of s.data) {
+          allTicksSet.add(pt[0]);
+        }
+      }
+      const allTicks = Array.from(allTicksSet).sort((a, b) => a - b);
+      for (const s of series) {
+        const alignedData = [];
+        const dataMap = new Map(s.data);
+        let lastValue = 0;
+        for (const tick of allTicks) {
+          if (dataMap.has(tick)) {
+            lastValue = dataMap.get(tick);
+          }
+          alignedData.push([tick, lastValue]);
+        }
+        s.data = alignedData;
+      }
+      return series;
     };
     return {
       isLoading: isLoading2,
@@ -20874,10 +20841,47 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
       entityMap: entityMapWithTargetData,
       showEntityDetailDamageList,
       getMabiNameColor,
-      prettyEntityName
+      prettyEntityName,
+      currentTargetDuration
     };
   }
 });
+const chartOpt = {
+  lang: {
+    locale: "en"
+  },
+  title: { text: "" },
+  chart: {
+    zooming: { type: "x" }
+  },
+  xAxis: {
+    type: "datetime",
+    labels: {
+      formatter: function() {
+        const sec = Math.floor(this.value / 1e3);
+        const m = Math.floor(sec / 60);
+        const s = sec % 60;
+        return `${m}:${s < 10 ? "0" : ""}${s}`;
+      }
+    }
+  },
+  yAxis: { title: { text: "" } },
+  tooltip: {
+    valueDecimals: 0,
+    shared: true,
+    formatter: function() {
+      const sec = Math.floor(this.x / 1e3);
+      const m = Math.floor(sec / 60);
+      const s = sec % 60;
+      const timeStr = `${m}:${s < 10 ? "0" : ""}${s}`;
+      let tooltipText = `<b>相對時間: ${timeStr}</b><br/>`;
+      this.points.forEach((point) => {
+        tooltipText += `<span style="color:${point.color}">●</span> ${point.series.name}: <b>${point.y.toLocaleString()}</b><br/>`;
+      });
+      return tooltipText;
+    }
+  }
+};
 const makeVDividerProps = propsFactory({
   color: String,
   inset: Boolean,
@@ -25440,33 +25444,36 @@ const VSwitch = genericComponent()({
 });
 const _hoisted_1$2 = {
   ref: "chartDom",
-  style: { "width": "100%", "height": "350px" }
+  style: { "width": "100svw", "height": "300px" }
 };
 const _hoisted_2$1 = { class: "d-flex ma-2 ga-2 align-center flex-wrap" };
 const _hoisted_3$1 = /* @__PURE__ */ createBaseVNode("span", null, "活躍DPS僅計算傷害大於0的時段。若相鄰兩次攻擊間隔小於或等於緩衝時間（B 秒），會合併計算為同一次活躍攻擊區間。活躍區間僅向後延伸緩衝時間，且不超過對該敵人的最後一次攻擊時間。單次獨立攻擊的最少活躍時間為 1 秒。", -1);
-const _hoisted_4$1 = { class: "font-weight-bold" };
-const _hoisted_5 = { class: "text-grey" };
-const _hoisted_6 = { class: "text-primary font-weight-bold" };
-const _hoisted_7 = ["src"];
-const _hoisted_8 = {
+const _hoisted_4$1 = {
+  key: 0,
+  class: "ml-2 font-weight-bold text-subtitle-2 text-grey-darken-3"
+};
+const _hoisted_5 = { class: "text-primary" };
+const _hoisted_6 = { class: "font-weight-bold" };
+const _hoisted_7 = { class: "text-grey" };
+const _hoisted_8 = { class: "text-primary font-weight-bold" };
+const _hoisted_9 = ["src"];
+const _hoisted_10 = {
   key: 0,
   class: "d-flex flex-wrap align-center mt-1",
   style: { "gap": "8px" }
 };
-const _hoisted_9 = ["src"];
+const _hoisted_11 = ["src"];
 function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
   const _component_damage_list = resolveComponent("damage-list");
   return openBlock(), createElementBlock(Fragment, null, [
-    _ctx.targetId ? (openBlock(), createBlock(VCard, {
-      key: 0,
-      class: "ma-2 pa-2 bg-white",
-      variant: "outlined"
-    }, {
+    withDirectives(createVNode(VSheet, null, {
       default: withCtx(() => [
         createBaseVNode("div", _hoisted_1$2, null, 512)
       ]),
       _: 1
-    })) : createCommentVNode("", true),
+    }, 512), [
+      [vShow, _ctx.targetId]
+    ]),
     createBaseVNode("div", _hoisted_2$1, [
       createVNode(VSelect, {
         modelValue: _ctx.targetId,
@@ -25480,7 +25487,7 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
         variant: "outlined",
         density: "compact",
         "hide-details": "",
-        style: { "max-width": "250px", "min-width": "120px" }
+        style: { "max-width": "400px", "min-width": "200px" }
       }, null, 8, ["modelValue", "items", "item-title", "item-value"]),
       createVNode(VTextField, {
         modelValue: _ctx.activeDpsBuffer,
@@ -25535,7 +25542,11 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
         density: "compact",
         "hide-details": "",
         class: "ml-2"
-      }, null, 8, ["modelValue"])
+      }, null, 8, ["modelValue"]),
+      _ctx.targetId ? (openBlock(), createElementBlock("span", _hoisted_4$1, [
+        createTextVNode(" 攻略總時間: "),
+        createBaseVNode("span", _hoisted_5, toDisplayString(_ctx.currentTargetDuration), 1)
+      ])) : createCommentVNode("", true)
     ]),
     (openBlock(true), createElementBlock(Fragment, null, renderList(_ctx.pcEntities, (v) => {
       return openBlock(), createBlock(VExpansionPanels, {
@@ -25553,9 +25564,9 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
                       style: { "gap": "12px" }
                     }, {
                       default: withCtx(() => [
-                        createBaseVNode("span", _hoisted_4$1, toDisplayString(_ctx.prettyEntityName(v.actor)), 1),
+                        createBaseVNode("span", _hoisted_6, toDisplayString(_ctx.prettyEntityName(v.actor)), 1),
                         createBaseVNode("span", null, "傷害: " + toDisplayString(v.totalDamage.toFixed(0)), 1),
-                        createBaseVNode("span", _hoisted_5, "(" + toDisplayString((100 * v.totalDamage / _ctx.allApplyDamage).toFixed(1)) + "%)", 1),
+                        createBaseVNode("span", _hoisted_7, "(" + toDisplayString((100 * v.totalDamage / _ctx.allApplyDamage).toFixed(1)) + "%)", 1),
                         createVNode(VDivider, {
                           vertical: "",
                           class: "mx-1"
@@ -25565,7 +25576,7 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
                           vertical: "",
                           class: "mx-1"
                         }),
-                        createBaseVNode("span", _hoisted_6, "活躍DPS: " + toDisplayString(_ctx.calculateActiveDps(v.damages, _ctx.activeDpsBuffer)), 1)
+                        createBaseVNode("span", _hoisted_8, "活躍DPS: " + toDisplayString(_ctx.calculateActiveDps(v.damages, _ctx.activeDpsBuffer)), 1)
                       ]),
                       _: 2
                     }, 1024)
@@ -25589,7 +25600,7 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
                                 width: "32",
                                 height: "32",
                                 src: `/res/skillimage/${_ctx.region}/${skillId}/${skillId}.png`
-                              }, null, 8, _hoisted_7)
+                              }, null, 8, _hoisted_9)
                             ]),
                             _: 2
                           }, 1024),
@@ -25606,7 +25617,7 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
                                   var _a, _b;
                                   return [
                                     createBaseVNode("div", null, toDisplayString(_ctx.skillNameMap[+skillId] || `unknownSkill:${skillId}`) + " damage: " + toDisplayString(damageBySkill.toFixed(0)) + " count: " + toDisplayString(v.groupedCount[+skillId]) + " avgDamage: " + toDisplayString((v.groupedCount[+skillId] ? damageBySkill / v.groupedCount[+skillId] : 0).toFixed(0)) + " minDamage: " + toDisplayString(((_a = v.groupedMinDamages[+skillId]) == null ? void 0 : _a.toFixed(0)) || "0") + " maxDamage: " + toDisplayString(((_b = v.groupedMaxDamages[+skillId]) == null ? void 0 : _b.toFixed(0)) || "0") + " " + toDisplayString((100 * damageBySkill / v.totalDamage).toFixed(1)) + "% ", 1),
-                                    (_ctx.showBuffCoverage || _ctx.showDebuffCoverage) && _ctx.getSkillConditionCoverage(v.groupedDamages[skillId], _ctx.showBuffCoverage, _ctx.showDebuffCoverage).length > 0 ? (openBlock(), createElementBlock("div", _hoisted_8, [
+                                    (_ctx.showBuffCoverage || _ctx.showDebuffCoverage) && _ctx.getSkillConditionCoverage(v.groupedDamages[skillId], _ctx.showBuffCoverage, _ctx.showDebuffCoverage).length > 0 ? (openBlock(), createElementBlock("div", _hoisted_10, [
                                       (openBlock(true), createElementBlock(Fragment, null, renderList(_ctx.getSkillConditionCoverage(v.groupedDamages[skillId], _ctx.showBuffCoverage, _ctx.showDebuffCoverage), (c) => {
                                         return openBlock(), createElementBlock("div", {
                                           key: c.ccId,
@@ -25617,7 +25628,7 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
                                             width: "16",
                                             height: "16",
                                             src: `/res/characterconditionimage/${_ctx.region}/${c.ccId}/${c.ccId}.png`
-                                          }, null, 8, _hoisted_9),
+                                          }, null, 8, _hoisted_11),
                                           createBaseVNode("span", null, [
                                             createTextVNode(toDisplayString(_ctx.condNameMap[c.ccId] || `CC:${c.ccId}`) + ": ", 1),
                                             createBaseVNode("b", null, toDisplayString(c.percentage.toFixed(1)) + "%", 1)
@@ -37314,4 +37325,4 @@ app.config.errorHandler = (err) => {
   console.error(err);
 };
 app.use(vuetify).mount("#app");
-//# sourceMappingURL=index-BxxDIPje.js.map
+//# sourceMappingURL=index-Dk2RYV6M.js.map

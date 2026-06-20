@@ -1,12 +1,12 @@
 <template>
-    <v-card v-if="targetId" class="ma-2 pa-2 bg-white" variant="outlined">
-        <div ref="chartDom" style="width: 100%; height: 350px;"></div>
-    </v-card>
+    <v-sheet v-show="targetId">
+        <div ref="chartDom" style="width: 100svw; height: 300px;"></div>
+    </v-sheet>
 
     <div class="d-flex ma-2 ga-2 align-center flex-wrap">
         <v-select v-model="targetId" :items="targetIdList"
             :item-title="vv => `${vv[0] ? prettyEntityName(entityMap[vv[0]]?.actor) : 'all'} ${vv[1]?.toFixed(0)}`"
-            :item-value="vv => vv[0]" variant="outlined" density="compact" hide-details style="max-width: 250px; min-width: 120px;">
+            :item-value="vv => vv[0]" variant="outlined" density="compact" hide-details style="max-width: 400px; min-width: 200px;">
         </v-select>
         <v-text-field v-model.number="activeDpsBuffer" type="number" min="0" label="活躍DPS緩衝 (秒)"
             variant="outlined" density="compact" hide-details style="max-width: 150px; min-width: 100px;">
@@ -21,6 +21,9 @@
         </v-text-field>
         <v-switch v-model="showBuffCoverage" label="顯示 Buff 覆蓋率" color="primary" density="compact" hide-details class="ml-2"></v-switch>
         <v-switch v-model="showDebuffCoverage" label="顯示 Debuff 覆蓋率" color="error" density="compact" hide-details class="ml-2"></v-switch>
+        <span v-if="targetId" class="ml-2 font-weight-bold text-subtitle-2 text-grey-darken-3">
+            攻略總時間: <span class="text-primary">{{ currentTargetDuration }}</span>
+        </span>
     </div>
 
     <v-expansion-panels multiple v-for="v in pcEntities" v-bind:key="v.actor.id">
@@ -132,7 +135,12 @@ export default defineComponent({
         const chartDom = ref<HTMLElement>(undefined!);
         let chart: Highcharts.Chart = undefined!;
 
-        // const chartData = computed(() => getChartSeriesData(pcEntities.value.filter(v => v.totalDamage > 10000)));
+        const chartData = computed(() => {
+            if (!targetId.value) {
+                return [];
+            }
+            return getChartSeriesData(pcEntities.value.filter(v => v.totalDamage > 10000));
+        });
 
         onUnmounted(() => {
             appEvent.value.removeEventListener('clear', clearTarget);
@@ -232,6 +240,43 @@ export default defineComponent({
         const pcEntities = computed(() =>
             Object.values(entityMapWithTargetData.value).filter(v => v.actor.isPC).sort((a, b) => b.totalDamage - a.totalDamage));
 
+        const combatTimeRange = computed(() => {
+            if (!targetId.value) {
+                return { start: 0, end: 0, duration: 0 };
+            }
+            const dmgs = targetDC.value.groupedDamages[targetId.value] || [];
+            if (dmgs.length === 0) {
+                return { start: 0, end: 0, duration: 0 };
+            }
+            const validDmgs = dmgs.filter(d => d.Damage > 0);
+            if (validDmgs.length === 0) {
+                return { start: 0, end: 0, duration: 0 };
+            }
+            const times = validDmgs.map(d => d.At);
+            const start = Math.min(...times);
+            const end = Math.max(...times);
+            return { start, end, duration: end - start };
+        });
+
+        const formatDuration = (seconds: number): string => {
+            const s = Math.ceil(seconds);
+            const m = Math.floor(s / 60);
+            const remainingS = s % 60;
+            return `${m}:${remainingS < 10 ? '0' : ''}${remainingS}`;
+        };
+
+        const currentTargetDuration = computed(() => {
+            if (!targetId.value) {
+                return '0:00';
+            }
+            const start = combatTimeRange.value.start;
+            const end = combatTimeRange.value.end;
+            if (start === 0 || end === 0) {
+                return '0:00';
+            }
+            return formatDuration(end - start);
+        });
+
         const targetId = ref('');
         const activeDpsBuffer = ref(10);
 
@@ -313,171 +358,6 @@ export default defineComponent({
                 .sort((a, b) => b.percentage - a.percentage);
         };
 
-        let chartStartTime = 0;
-
-        const createOrUpdateChart = (seriesData: any[]) => {
-            if (!chartDom.value) {
-                console.log("[Chart Debug] chartDom.value is null, cannot draw chart");
-                return;
-            }
-
-            const chartOpt: Options = {
-                chart: {
-                    type: 'line',
-                    zooming: { type: 'x' },
-                    backgroundColor: '#ffffff',
-                },
-                colors: [
-                    '#1f77b4', // blue
-                    '#ff7f0e', // orange
-                    '#2ca02c', // green
-                    '#d62728', // red
-                    '#9467bd', // purple
-                    '#8c564b', // brown
-                    '#e377c2', // pink
-                    '#7f7f7f', // gray
-                    '#bcbd22', // olive
-                    '#17becf'  // cyan
-                ],
-                title: { text: '' },
-                xAxis: {
-                    type: 'datetime',
-                    crosshair: true,
-                    lineColor: '#cccccc',
-                    tickColor: '#cccccc',
-                    labels: {
-                        style: { color: '#333333' },
-                        formatter: function (this: any) {
-                            const diff = this.value - chartStartTime;
-                            const sec = Math.floor(diff / 1000);
-                            const m = Math.floor(sec / 60);
-                            const s = sec % 60;
-                            return `${m}:${s < 10 ? '0' : ''}${s}`;
-                        }
-                    }
-                },
-                yAxis: {
-                    title: { text: '每秒傷害總和', style: { color: '#333333' } },
-                    labels: { style: { color: '#333333' } },
-                    gridLineWidth: 1,
-                    gridLineColor: '#e6e6e6',
-                    lineColor: '#cccccc',
-                    lineWidth: 1,
-                },
-                tooltip: {
-                    shared: true,
-                    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-                    style: {
-                        color: '#333333',
-                    },
-                    formatter: function (this: any) {
-                        const diff = this.x - chartStartTime;
-                        const sec = Math.floor(diff / 1000);
-                        const m = Math.floor(sec / 60);
-                        const s = sec % 60;
-                        let tooltipText = `<span style="color:#333;font-weight:bold;">時間: ${m}:${s < 10 ? '0' : ''}${s}</span><br/>`;
-
-                        this.points.forEach((point: any) => {
-                            tooltipText += `<span style="color:${point.color}">●</span> ${point.series.name}: <b>${point.y.toLocaleString()} 傷害</b><br/>`;
-                        });
-
-                        return tooltipText;
-                    }
-                },
-                legend: {
-                    itemStyle: { color: '#333333' }
-                },
-                series: seriesData,
-                credits: { enabled: false },
-            };
-
-            console.log("[Chart Debug] Rendering Highcharts with options:", chartOpt);
-            try {
-                if (chart) {
-                    chart.destroy();
-                }
-                chart = highcharts.chart(chartDom.value, chartOpt);
-                console.log("[Chart Debug] Highcharts render successful");
-            } catch (err) {
-                console.error("[Chart Debug] Highcharts render failed:", err);
-            }
-        };
-
-        const updateChart = () => {
-            console.log("[Chart Debug] updateChart triggered, targetId:", targetId.value);
-            // Destroy chart if no targetId is selected (choose 'all')
-            if (!targetId.value) {
-                console.log("[Chart Debug] No targetId selected, destroying chart");
-                if (chart) {
-                    chart.destroy();
-                    chart = undefined!;
-                }
-                return;
-            }
-
-            if (!chartDom.value) {
-                console.log("[Chart Debug] chartDom is not ready, deferring update");
-                return;
-            }
-
-            // Only display players who participated in attacking the selected target (totalDamage > 0)
-            const activePlayers = pcEntities.value.filter(p => p.totalDamage > 0);
-            const allDamages = activePlayers.flatMap(v => v.damages);
-            console.log("[Chart Debug] Active players count:", activePlayers.length, "Total damages count:", allDamages.length);
-
-            if (allDamages.length === 0) {
-                console.log("[Chart Debug] No damage events found, destroying chart");
-                if (chart) {
-                    chart.destroy();
-                    chart = undefined!;
-                }
-                return;
-            }
-
-            // Discretize time to integers using floor/ceil to avoid decimal mismatch in exact matching
-            const tStart = Math.floor(Math.min(...allDamages.map(d => d.At)));
-            const tEnd = Math.ceil(Math.max(...allDamages.map(d => d.At)));
-            chartStartTime = tStart * 1000;
-            console.log("[Chart Debug] Combat range (seconds):", tStart, "to", tEnd, "Duration:", tEnd - tStart);
-
-            const seriesData: any[] = [];
-
-            for (const p of activePlayers) {
-                const pDamages = p.damages.filter(d => d.Damage > 0);
-                const pData: [number, number][] = [];
-
-                for (let t = tStart; t <= tEnd; t += 1) {
-                    let sum = 0;
-                    for (const d of pDamages) {
-                        if (Math.floor(d.At) === t) {
-                            sum += d.Damage;
-                        }
-                    }
-                    pData.push([t * 1000, sum]);
-                }
-
-                console.log(`[Chart Debug] Player: ${prettyEntityName(p.actor)}, Data Points Count:`, pData.length, "Max damage in single point:", Math.max(...pData.map(pt => pt[1])));
-
-                seriesData.push({
-                    name: prettyEntityName(p.actor)!,
-                    type: 'line',
-                    data: pData,
-                });
-            }
-
-            createOrUpdateChart(seriesData);
-        };
-
-        let debouncedUpdateTimer = 0;
-        const triggerChartUpdate = () => {
-            if (debouncedUpdateTimer) {
-                clearTimeout(debouncedUpdateTimer);
-            }
-            debouncedUpdateTimer = setTimeout(() => {
-                debouncedUpdateTimer = 0;
-                updateChart();
-            }, 300);
-        };
         const targetIdList = computed(() => {
             const list = Object.entries(targetDC.value.groupedTotalDamages)
                 .sort(([, av], [, bv]) => bv - av);
@@ -494,11 +374,54 @@ export default defineComponent({
         onMounted(() => {
             appEvent.value.addEventListener('clear', clearTarget);
 
-            watch([pcEntities, targetId], () => {
-                triggerChartUpdate();
-            }, { deep: true });
+            let debounced1 = 0;
+            watch(entityMap, () => {
+                if (debounced1) {
+                    return;
+                }
 
-            triggerChartUpdate();
+                setTimeout(() => {
+                    debounced1 = 0;
+                    if (chart) {
+                        chart.destroy();
+                        chart = undefined!;
+                    }
+                    if (targetId.value && chartDom.value) {
+                        chart = highcharts.chart(chartDom.value, { ...chartOpt, series: chartData.value });
+                    }
+                }, 100);
+            });
+
+            let debounced2: number = 0;
+            watch(chartData, () => {
+                if (debounced2) {
+                    return;
+                }
+
+                debounced2 = setTimeout(() => {
+                    debounced2 = 0;
+                    if (targetId.value && chart) {
+                        chart.update({ series: chartData.value });
+                    }
+                }, 100);
+            });
+
+            watch(targetId, (newVal) => {
+                if (!newVal) {
+                    if (chart) {
+                        chart.destroy();
+                        chart = undefined!;
+                    }
+                } else {
+                    setTimeout(() => {
+                        if (!chart && chartDom.value) {
+                            chart = highcharts.chart(chartDom.value, { ...chartOpt, series: chartData.value });
+                        } else if (chart) {
+                            chart.update({ series: chartData.value });
+                        }
+                    }, 100);
+                }
+            });
         })
 
         const allApplyDamage = computed(() =>
@@ -531,11 +454,13 @@ export default defineComponent({
         }
 
         const getChartSeriesData = (entity: EntityExtended[]): SeriesAreaOptions[] => {
+            const start = combatTimeRange.value.start;
             const series = entity.map((v): SeriesAreaOptions & { data: [number, number][] } => ({
                 type: 'area',
                 name: prettyEntityName(v.actor)!,
                 data: v.damages.reduce((acc, v) => {
-                    const normalizedTime = (v.At - (v.At % 60)) * 1000;
+                    const relativeSec = Math.floor(v.At - start);
+                    const normalizedTime = (Math.floor(relativeSec / 60) + 1) * 60 * 1000;
                     const last = acc[acc.length - 1];
                     if (last && last[0] == normalizedTime) {
                         last[1] += v.Damage;
@@ -543,7 +468,7 @@ export default defineComponent({
                     }
 
                     return acc.concat([[normalizedTime, v.Damage + (last?.[1] || 0)]]);
-                }, [] as [number, number][]),
+                }, [[0, 0]] as [number, number][]),
                 stacking: 'normal',
                 dataGrouping: {
                     enabled: true,
@@ -551,14 +476,28 @@ export default defineComponent({
                 },
             }));
 
-            for (let i = 0; i < (series[0]?.data.length || 0); i++) {
-                const tickAt = Math.min(...series.map(v => v.data[i]?.[0] || Infinity));
-
-                for (const s of series) {
-                    if (s.data[i]?.[0] != tickAt) {
-                        s.data.splice(i, 0, [tickAt, s.data[i - 1]?.[1] || 0]);
-                    }
+            // Collect all unique relative timestamps across all players
+            const allTicksSet = new Set<number>();
+            for (const s of series) {
+                for (const pt of s.data) {
+                    allTicksSet.add(pt[0]);
                 }
+            }
+            const allTicks = Array.from(allTicksSet).sort((a, b) => a - b);
+
+            // Align each series to have a point at every timestamp in allTicks
+            for (const s of series) {
+                const alignedData: [number, number][] = [];
+                const dataMap = new Map<number, number>(s.data);
+                
+                let lastValue = 0;
+                for (const tick of allTicks) {
+                    if (dataMap.has(tick)) {
+                        lastValue = dataMap.get(tick)!;
+                    }
+                    alignedData.push([tick, lastValue]);
+                }
+                s.data = alignedData;
             }
 
             return series;
@@ -588,6 +527,7 @@ export default defineComponent({
             showEntityDetailDamageList,
             getMabiNameColor,
             prettyEntityName,
+            currentTargetDuration,
         }
     }
 });
@@ -612,10 +552,32 @@ const chartOpt: Options = {
     chart: {
         zooming: { type: 'x' },
     },
-    xAxis: { type: 'datetime' },
+    xAxis: { 
+        type: 'datetime',
+        labels: {
+            formatter: function (this: any) {
+                const sec = Math.floor(this.value / 1000);
+                const m = Math.floor(sec / 60);
+                const s = sec % 60;
+                return `${m}:${s < 10 ? '0' : ''}${s}`;
+            }
+        }
+    },
     yAxis: { title: { text: '' } },
     tooltip: {
         valueDecimals: 0,
+        shared: true,
+        formatter: function (this: any) {
+            const sec = Math.floor(this.x / 1000);
+            const m = Math.floor(sec / 60);
+            const s = sec % 60;
+            const timeStr = `${m}:${s < 10 ? '0' : ''}${s}`;
+            let tooltipText = `<b>相對時間: ${timeStr}</b><br/>`;
+            this.points.forEach((point: any) => {
+                tooltipText += `<span style="color:${point.color}">\u25CF</span> ${point.series.name}: <b>${point.y.toLocaleString()}</b><br/>`;
+            });
+            return tooltipText;
+        }
     },
 };
 
