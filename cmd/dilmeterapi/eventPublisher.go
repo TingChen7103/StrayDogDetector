@@ -464,7 +464,8 @@ func (t *eventPublisher) loop() {
 
 				delay := p.Msg[0].Data().(uint32)
 				ttype := p.Msg[1].Data().(uint32)
-				if ttype != 317 {
+				if ttype != 318 {
+					_ = delay
 					// 연공 블래스트가 아님
 					continue
 				}
