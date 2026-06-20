@@ -2,20 +2,37 @@
     <v-sheet>
         <!-- <div ref="chartDom" style="width: 100svw; height: 300px;"></div> -->
     </v-sheet>
-    <v-select v-model="targetId" :items="targetIdList"
-        :item-title="vv => `${vv[0] ? prettyEntityName(entityMap[vv[0]]?.actor) : 'all'} ${vv[1]?.toFixed(0)}`"
-        :item-value="vv => vv[0]" class="ma-2" variant="outlined" density="compact" hide-details>
-    </v-select>
+    <div class="d-flex ma-2 ga-2 align-center">
+        <v-select v-model="targetId" :items="targetIdList"
+            :item-title="vv => `${vv[0] ? prettyEntityName(entityMap[vv[0]]?.actor) : 'all'} ${vv[1]?.toFixed(0)}`"
+            :item-value="vv => vv[0]" variant="outlined" density="compact" hide-details style="max-width: 65%;">
+        </v-select>
+        <v-text-field v-model.number="activeDpsBuffer" type="number" min="0" label="活躍DPS緩衝 (秒)"
+            variant="outlined" density="compact" hide-details style="max-width: 35%;">
+            <template v-slot:append-inner>
+                <v-tooltip location="bottom" max-width="300">
+                    <template v-slot:activator="{ props }">
+                        <v-icon v-bind="props" size="small" color="grey">mdi-help-circle-outline</v-icon>
+                    </template>
+                    <span>活躍DPS僅計算傷害大於0的時段。若相鄰兩次攻擊間隔小於或等於緩衝時間（B 秒），會合併計算為同一次活躍攻擊區間。活躍區間僅向後延伸緩衝時間，且不超過對該敵人的最後一次攻擊時間。單次獨立攻擊的最少活躍時間為 1 秒。</span>
+                </v-tooltip>
+            </template>
+        </v-text-field>
+    </div>
 
     <v-expansion-panels multiple v-for="v in pcEntities" v-bind:key="v.actor.id">
         <template v-if="v.totalDamage > 0">
             <v-expansion-panel>
                 <v-expansion-panel-title>
-                    <v-sheet>
-                        {{ prettyEntityName(v.actor) }} {{ v.totalDamage.toFixed(0) }} {{ (100 * v.totalDamage /
-                            allApplyDamage).toFixed(1) }}% dps {{ v.damages.length < 2 ? 0 : Math.round(v.totalDamage /
-                            (v.damages[v.damages.length - 1].At - v.damages[0].At)) }} </v-sheet>
-
+                    <v-sheet class="d-flex flex-wrap align-center bg-transparent" style="gap: 12px;">
+                        <span class="font-weight-bold">{{ prettyEntityName(v.actor) }}</span>
+                        <span>傷害: {{ v.totalDamage.toFixed(0) }}</span>
+                        <span class="text-grey">({{ (100 * v.totalDamage / allApplyDamage).toFixed(1) }}%)</span>
+                        <v-divider vertical class="mx-1"></v-divider>
+                        <span>整體DPS: {{ v.damages.length < 2 ? 0 : Math.round(v.totalDamage / (v.damages[v.damages.length - 1].At - v.damages[0].At)) }}</span>
+                        <v-divider vertical class="mx-1"></v-divider>
+                        <span class="text-primary font-weight-bold">活躍DPS: {{ calculateActiveDps(v.damages, activeDpsBuffer) }}</span>
+                    </v-sheet>
                 </v-expansion-panel-title>
                 <v-expansion-panel-text class="pa-3">
                     <v-sheet
@@ -202,6 +219,46 @@ export default defineComponent({
             Object.values(entityMapWithTargetData.value).filter(v => v.actor.isPC).sort((a, b) => b.totalDamage - a.totalDamage));
 
         const targetId = ref('');
+        const activeDpsBuffer = ref(10);
+
+        const calculateActiveDps = (damages: EntityDamage[], buffer: number): number => {
+            const validDamages = damages.filter(d => d.Damage > 0);
+            if (validDamages.length === 0) {
+                return 0;
+            }
+
+            // Sort by At ascending
+            const sorted = [...validDamages].sort((a, b) => a.At - b.At);
+            const b = Math.max(0, buffer || 0);
+            const mergeThreshold = b;
+            const tLast = sorted[sorted.length - 1].At;
+
+            let activeTime = 0;
+            let segmentStart = sorted[0].At;
+            let segmentEnd = sorted[0].At;
+
+            for (let i = 1; i < sorted.length; i++) {
+                const currentAt = sorted[i].At;
+                if (currentAt - segmentEnd <= mergeThreshold) {
+                    segmentEnd = currentAt;
+                } else {
+                    // Finish current segment
+                    const bufferedEnd = Math.min(segmentEnd + b, tLast);
+                    const duration = Math.max(1, Math.ceil(bufferedEnd - segmentStart));
+                    activeTime += duration;
+                    // Start new segment
+                    segmentStart = currentAt;
+                    segmentEnd = currentAt;
+                }
+            }
+            // Finish the last segment
+            const bufferedEnd = Math.min(segmentEnd + b, tLast);
+            const finalDuration = Math.max(1, Math.ceil(bufferedEnd - segmentStart));
+            activeTime += finalDuration;
+
+            const sumDamage = validDamages.reduce((sum, d) => sum + d.Damage, 0);
+            return activeTime > 0 ? Math.round(sumDamage / activeTime) : 0;
+        };
         const targetIdList = computed(() => {
             const list = Object.entries(targetDC.value.groupedTotalDamages)
                 .sort(([, av], [, bv]) => bv - av);
@@ -319,6 +376,8 @@ export default defineComponent({
             allApplyDamage,
             targetId,
             targetIdList,
+            activeDpsBuffer,
+            calculateActiveDps,
             detailDialog,
             detailDialogData,
 

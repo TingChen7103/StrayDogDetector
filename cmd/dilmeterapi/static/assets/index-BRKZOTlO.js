@@ -13336,8 +13336,8 @@ const VVirtualScroll = genericComponent()({
   }
 });
 const _hoisted_1$4 = ["src"];
-const _hoisted_2$1 = ["onMouseover", "onClick", "src"];
-const _hoisted_3$1 = ["onMouseover", "onClick", "src"];
+const _hoisted_2$2 = ["onMouseover", "onClick", "src"];
+const _hoisted_3$2 = ["onMouseover", "onClick", "src"];
 function _sfc_render$5(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock(Fragment, null, [
     createVNode(VSheet, {
@@ -13384,7 +13384,7 @@ function _sfc_render$5(_ctx, _cache, $props, $setup, $data, $options) {
                           onMouseleave: _cache[0] || (_cache[0] = (e) => _ctx.setCondTooltip(e.target, void 0)),
                           onClick: (e) => _ctx.setCondTooltip(e.target, cond),
                           src: `/res/characterconditionimage/${_ctx.region}/${cond.CCId}/${cond.CCId}.png`
-                        }, null, 40, _hoisted_2$1);
+                        }, null, 40, _hoisted_2$2);
                       }), 128)),
                       createTextVNode(" -> "),
                       (openBlock(true), createElementBlock(Fragment, null, renderList(item.TargetConditions, (cond) => {
@@ -13396,7 +13396,7 @@ function _sfc_render$5(_ctx, _cache, $props, $setup, $data, $options) {
                           onMouseleave: _cache[1] || (_cache[1] = (e) => _ctx.setCondTooltip(e.target, void 0)),
                           onClick: (e) => _ctx.setCondTooltip(e.target, cond),
                           src: `/res/characterconditionimage/${_ctx.region}/${cond.CCId}/${cond.CCId}.png`
-                        }, null, 40, _hoisted_3$1);
+                        }, null, 40, _hoisted_3$2);
                       }), 128))
                     ]),
                     createBaseVNode("p", null, toDisplayString(_ctx.skillNameMap[item.SkillId]) + " " + toDisplayString(item.Damage.toFixed(0)) + " " + toDisplayString(item.IsCritical ? "크리티컬" : "") + " " + toDisplayString(item.IsDelayed ? "추가 대미지" : ""), 1)
@@ -15457,6 +15457,37 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
     });
     const pcEntities = computed(() => Object.values(entityMapWithTargetData.value).filter((v) => v.actor.isPC).sort((a, b) => b.totalDamage - a.totalDamage));
     const targetId = ref("");
+    const activeDpsBuffer = ref(10);
+    const calculateActiveDps = (damages, buffer) => {
+      const validDamages = damages.filter((d) => d.Damage > 0);
+      if (validDamages.length === 0) {
+        return 0;
+      }
+      const sorted = [...validDamages].sort((a, b2) => a.At - b2.At);
+      const b = Math.max(0, buffer || 0);
+      const mergeThreshold = b;
+      const tLast = sorted[sorted.length - 1].At;
+      let activeTime = 0;
+      let segmentStart = sorted[0].At;
+      let segmentEnd = sorted[0].At;
+      for (let i = 1; i < sorted.length; i++) {
+        const currentAt = sorted[i].At;
+        if (currentAt - segmentEnd <= mergeThreshold) {
+          segmentEnd = currentAt;
+        } else {
+          const bufferedEnd2 = Math.min(segmentEnd + b, tLast);
+          const duration = Math.max(1, Math.ceil(bufferedEnd2 - segmentStart));
+          activeTime += duration;
+          segmentStart = currentAt;
+          segmentEnd = currentAt;
+        }
+      }
+      const bufferedEnd = Math.min(segmentEnd + b, tLast);
+      const finalDuration = Math.max(1, Math.ceil(bufferedEnd - segmentStart));
+      activeTime += finalDuration;
+      const sumDamage = validDamages.reduce((sum, d) => sum + d.Damage, 0);
+      return activeTime > 0 ? Math.round(sumDamage / activeTime) : 0;
+    };
     const targetIdList = computed(() => {
       const list = Object.entries(targetDC.value.groupedTotalDamages).sort(([, av], [, bv]) => bv - av);
       list.unshift(["", targetDC.value.totalDamage]);
@@ -15495,6 +15526,8 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
       allApplyDamage,
       targetId,
       targetIdList,
+      activeDpsBuffer,
+      calculateActiveDps,
       detailDialog,
       detailDialogData,
       skillNameMap: skillNameMap2,
@@ -15503,6 +15536,67 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
       getMabiNameColor,
       prettyEntityName
     };
+  }
+});
+const makeVDividerProps = propsFactory({
+  color: String,
+  inset: Boolean,
+  length: [Number, String],
+  opacity: [Number, String],
+  thickness: [Number, String],
+  vertical: Boolean,
+  ...makeComponentProps(),
+  ...makeThemeProps()
+}, "VDivider");
+const VDivider = genericComponent()({
+  name: "VDivider",
+  props: makeVDividerProps(),
+  setup(props, _ref) {
+    let {
+      attrs,
+      slots
+    } = _ref;
+    const {
+      themeClasses
+    } = provideTheme(props);
+    const {
+      textColorClasses,
+      textColorStyles
+    } = useTextColor(toRef(props, "color"));
+    const dividerStyles = computed(() => {
+      const styles = {};
+      if (props.length) {
+        styles[props.vertical ? "height" : "width"] = convertToUnit(props.length);
+      }
+      if (props.thickness) {
+        styles[props.vertical ? "borderRightWidth" : "borderTopWidth"] = convertToUnit(props.thickness);
+      }
+      return styles;
+    });
+    useRender(() => {
+      const divider = createVNode("hr", {
+        "class": [{
+          "v-divider": true,
+          "v-divider--inset": props.inset,
+          "v-divider--vertical": props.vertical
+        }, themeClasses.value, textColorClasses.value, props.class],
+        "style": [dividerStyles.value, textColorStyles.value, {
+          "--v-border-opacity": props.opacity
+        }, props.style],
+        "aria-orientation": !attrs.role || attrs.role === "separator" ? props.vertical ? "vertical" : "horizontal" : void 0,
+        "role": `${attrs.role || "separator"}`
+      }, null);
+      if (!slots.default) return divider;
+      return createVNode("div", {
+        "class": ["v-divider__wrapper", {
+          "v-divider__wrapper--vertical": props.vertical,
+          "v-divider__wrapper--inset": props.inset
+        }]
+      }, [divider, createVNode("div", {
+        "class": "v-divider__content"
+      }, [slots.default()]), divider]);
+    });
+    return {};
   }
 });
 const makeVLabelProps = propsFactory({
@@ -18217,67 +18311,6 @@ const VListSubheader = genericComponent()({
     return {};
   }
 });
-const makeVDividerProps = propsFactory({
-  color: String,
-  inset: Boolean,
-  length: [Number, String],
-  opacity: [Number, String],
-  thickness: [Number, String],
-  vertical: Boolean,
-  ...makeComponentProps(),
-  ...makeThemeProps()
-}, "VDivider");
-const VDivider = genericComponent()({
-  name: "VDivider",
-  props: makeVDividerProps(),
-  setup(props, _ref) {
-    let {
-      attrs,
-      slots
-    } = _ref;
-    const {
-      themeClasses
-    } = provideTheme(props);
-    const {
-      textColorClasses,
-      textColorStyles
-    } = useTextColor(toRef(props, "color"));
-    const dividerStyles = computed(() => {
-      const styles = {};
-      if (props.length) {
-        styles[props.vertical ? "height" : "width"] = convertToUnit(props.length);
-      }
-      if (props.thickness) {
-        styles[props.vertical ? "borderRightWidth" : "borderTopWidth"] = convertToUnit(props.thickness);
-      }
-      return styles;
-    });
-    useRender(() => {
-      const divider = createVNode("hr", {
-        "class": [{
-          "v-divider": true,
-          "v-divider--inset": props.inset,
-          "v-divider--vertical": props.vertical
-        }, themeClasses.value, textColorClasses.value, props.class],
-        "style": [dividerStyles.value, textColorStyles.value, {
-          "--v-border-opacity": props.opacity
-        }, props.style],
-        "aria-orientation": !attrs.role || attrs.role === "separator" ? props.vertical ? "vertical" : "horizontal" : void 0,
-        "role": `${attrs.role || "separator"}`
-      }, null);
-      if (!slots.default) return divider;
-      return createVNode("div", {
-        "class": ["v-divider__wrapper", {
-          "v-divider__wrapper--vertical": props.vertical,
-          "v-divider__wrapper--inset": props.inset
-        }]
-      }, [divider, createVNode("div", {
-        "class": "v-divider__content"
-      }, [slots.default()]), divider]);
-    });
-    return {};
-  }
-});
 const makeVListChildrenProps = propsFactory({
   items: Array,
   returnObject: Boolean
@@ -19897,25 +19930,68 @@ const VSelect = genericComponent()({
     }, vTextFieldRef);
   }
 });
-const _hoisted_1$2 = ["src"];
+const _hoisted_1$2 = { class: "d-flex ma-2 ga-2 align-center" };
+const _hoisted_2$1 = /* @__PURE__ */ createBaseVNode("span", null, "活躍DPS僅計算傷害大於0的時段。若相鄰兩次攻擊間隔小於或等於緩衝時間（B 秒），會合併計算為同一次活躍攻擊區間。活躍區間僅向後延伸緩衝時間，且不超過對該敵人的最後一次攻擊時間。單次獨立攻擊的最少活躍時間為 1 秒。", -1);
+const _hoisted_3$1 = { class: "font-weight-bold" };
+const _hoisted_4$1 = { class: "text-grey" };
+const _hoisted_5 = { class: "text-primary font-weight-bold" };
+const _hoisted_6 = ["src"];
 function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
   const _component_damage_list = resolveComponent("damage-list");
   return openBlock(), createElementBlock(Fragment, null, [
     createVNode(VSheet),
-    createVNode(VSelect, {
-      modelValue: _ctx.targetId,
-      "onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => _ctx.targetId = $event),
-      items: _ctx.targetIdList,
-      "item-title": (vv) => {
-        var _a, _b;
-        return `${vv[0] ? _ctx.prettyEntityName((_a = _ctx.entityMap[vv[0]]) == null ? void 0 : _a.actor) : "all"} ${(_b = vv[1]) == null ? void 0 : _b.toFixed(0)}`;
-      },
-      "item-value": (vv) => vv[0],
-      class: "ma-2",
-      variant: "outlined",
-      density: "compact",
-      "hide-details": ""
-    }, null, 8, ["modelValue", "items", "item-title", "item-value"]),
+    createBaseVNode("div", _hoisted_1$2, [
+      createVNode(VSelect, {
+        modelValue: _ctx.targetId,
+        "onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => _ctx.targetId = $event),
+        items: _ctx.targetIdList,
+        "item-title": (vv) => {
+          var _a, _b;
+          return `${vv[0] ? _ctx.prettyEntityName((_a = _ctx.entityMap[vv[0]]) == null ? void 0 : _a.actor) : "all"} ${(_b = vv[1]) == null ? void 0 : _b.toFixed(0)}`;
+        },
+        "item-value": (vv) => vv[0],
+        variant: "outlined",
+        density: "compact",
+        "hide-details": "",
+        style: { "max-width": "65%" }
+      }, null, 8, ["modelValue", "items", "item-title", "item-value"]),
+      createVNode(VTextField, {
+        modelValue: _ctx.activeDpsBuffer,
+        "onUpdate:modelValue": _cache[1] || (_cache[1] = ($event) => _ctx.activeDpsBuffer = $event),
+        modelModifiers: { number: true },
+        type: "number",
+        min: "0",
+        label: "活躍DPS緩衝 (秒)",
+        variant: "outlined",
+        density: "compact",
+        "hide-details": "",
+        style: { "max-width": "35%" }
+      }, {
+        "append-inner": withCtx(() => [
+          createVNode(VTooltip, {
+            location: "bottom",
+            "max-width": "300"
+          }, {
+            activator: withCtx(({ props }) => [
+              createVNode(VIcon, mergeProps(props, {
+                size: "small",
+                color: "grey"
+              }), {
+                default: withCtx(() => [
+                  createTextVNode("mdi-help-circle-outline")
+                ]),
+                _: 2
+              }, 1040)
+            ]),
+            default: withCtx(() => [
+              _hoisted_2$1
+            ]),
+            _: 1
+          })
+        ]),
+        _: 1
+      }, 8, ["modelValue"])
+    ]),
     (openBlock(true), createElementBlock(Fragment, null, renderList(_ctx.pcEntities, (v) => {
       return openBlock(), createBlock(VExpansionPanels, {
         multiple: "",
@@ -19927,9 +20003,24 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
               default: withCtx(() => [
                 createVNode(VExpansionPanelTitle, null, {
                   default: withCtx(() => [
-                    createVNode(VSheet, null, {
+                    createVNode(VSheet, {
+                      class: "d-flex flex-wrap align-center bg-transparent",
+                      style: { "gap": "12px" }
+                    }, {
                       default: withCtx(() => [
-                        createTextVNode(toDisplayString(_ctx.prettyEntityName(v.actor)) + " " + toDisplayString(v.totalDamage.toFixed(0)) + " " + toDisplayString((100 * v.totalDamage / _ctx.allApplyDamage).toFixed(1)) + "% dps " + toDisplayString(v.damages.length < 2 ? 0 : Math.round(v.totalDamage / (v.damages[v.damages.length - 1].At - v.damages[0].At))), 1)
+                        createBaseVNode("span", _hoisted_3$1, toDisplayString(_ctx.prettyEntityName(v.actor)), 1),
+                        createBaseVNode("span", null, "傷害: " + toDisplayString(v.totalDamage.toFixed(0)), 1),
+                        createBaseVNode("span", _hoisted_4$1, "(" + toDisplayString((100 * v.totalDamage / _ctx.allApplyDamage).toFixed(1)) + "%)", 1),
+                        createVNode(VDivider, {
+                          vertical: "",
+                          class: "mx-1"
+                        }),
+                        createBaseVNode("span", null, "整體DPS: " + toDisplayString(v.damages.length < 2 ? 0 : Math.round(v.totalDamage / (v.damages[v.damages.length - 1].At - v.damages[0].At))), 1),
+                        createVNode(VDivider, {
+                          vertical: "",
+                          class: "mx-1"
+                        }),
+                        createBaseVNode("span", _hoisted_5, "活躍DPS: " + toDisplayString(_ctx.calculateActiveDps(v.damages, _ctx.activeDpsBuffer)), 1)
                       ]),
                       _: 2
                     }, 1024)
@@ -19953,7 +20044,7 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
                                 width: "32",
                                 height: "32",
                                 src: `/res/skillimage/${_ctx.region}/${skillId}/${skillId}.png`
-                              }, null, 8, _hoisted_1$2)
+                              }, null, 8, _hoisted_6)
                             ]),
                             _: 2
                           }, 1024),
@@ -20023,7 +20114,7 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
     }), 128)),
     createVNode(VDialog, {
       modelValue: _ctx.detailDialog,
-      "onUpdate:modelValue": _cache[2] || (_cache[2] = ($event) => _ctx.detailDialog = $event),
+      "onUpdate:modelValue": _cache[3] || (_cache[3] = ($event) => _ctx.detailDialog = $event),
       "min-width": "60vw",
       height: "90svh"
     }, {
@@ -20048,7 +20139,7 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
                 createVNode(VBtn, {
                   color: "primary",
                   block: "",
-                  onClick: _cache[1] || (_cache[1] = ($event) => _ctx.detailDialog = false)
+                  onClick: _cache[2] || (_cache[2] = ($event) => _ctx.detailDialog = false)
                 }, {
                   default: withCtx(() => [
                     createTextVNode("Close")
@@ -31659,4 +31750,4 @@ app.config.errorHandler = (err) => {
   console.error(err);
 };
 app.use(vuetify).mount("#app");
-//# sourceMappingURL=index-i6S9NsOV.js.map
+//# sourceMappingURL=index-BRKZOTlO.js.map
