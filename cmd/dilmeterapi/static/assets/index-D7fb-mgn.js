@@ -20527,12 +20527,6 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
     const damageCollectorMap = {};
     const chartDom = ref(void 0);
     let chart = void 0;
-    const chartData = computed(() => {
-      if (!targetId.value) {
-        return [];
-      }
-      return getChartSeriesData(pcEntities.value.filter((v) => v.totalDamage > 1e4));
-    });
     onUnmounted(() => {
       appEvent2.value.removeEventListener("clear", clearTarget);
       for (const v of Object.values(damageCollectorMap)) {
@@ -20713,36 +20707,19 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
     const clearTarget = () => {
       targetId.value = "";
     };
+    const syncChart = () => {
+      if (!targetId.value || !chartDom.value) {
+        return;
+      }
+      const latestSeries = getChartSeriesData(pcEntities.value.filter((v) => v.totalDamage > 1e4));
+      if (chart) {
+        chart.destroy();
+        chart = void 0;
+      }
+      chart = highcharts.chart(chartDom.value, { ...chartOpt, series: latestSeries });
+    };
     onMounted(() => {
       appEvent2.value.addEventListener("clear", clearTarget);
-      let debounced1 = 0;
-      watch(entityMap, () => {
-        if (debounced1) {
-          return;
-        }
-        setTimeout(() => {
-          debounced1 = 0;
-          if (chart) {
-            chart.destroy();
-            chart = void 0;
-          }
-          if (targetId.value && chartDom.value) {
-            chart = highcharts.chart(chartDom.value, { ...chartOpt, series: chartData.value });
-          }
-        }, 100);
-      });
-      let debounced2 = 0;
-      watch(chartData, () => {
-        if (debounced2) {
-          return;
-        }
-        debounced2 = setTimeout(() => {
-          debounced2 = 0;
-          if (targetId.value && chart) {
-            chart.update({ series: chartData.value });
-          }
-        }, 100);
-      });
       watch(targetId, (newVal) => {
         if (!newVal) {
           if (chart) {
@@ -20751,11 +20728,7 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
           }
         } else {
           setTimeout(() => {
-            if (!chart && chartDom.value) {
-              chart = highcharts.chart(chartDom.value, { ...chartOpt, series: chartData.value });
-            } else if (chart) {
-              chart.update({ series: chartData.value });
-            }
+            syncChart();
           }, 100);
         }
       });
@@ -20781,44 +20754,38 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
     };
     const getChartSeriesData = (entity) => {
       const start = combatTimeRange.value.start;
-      const series = entity.map((v) => ({
-        type: "area",
-        name: prettyEntityName(v.actor),
-        data: v.damages.reduce((acc, v2) => {
-          const relativeSec = Math.floor(v2.At - start);
-          const normalizedTime = (Math.floor(relativeSec / 60) + 1) * 60 * 1e3;
-          const last = acc[acc.length - 1];
-          if (last && last[0] == normalizedTime) {
-            last[1] += v2.Damage;
-            return acc;
+      const end = combatTimeRange.value.end;
+      const duration = Math.ceil(end - start);
+      const playerBins = entity.map((v) => {
+        const dmgMap = /* @__PURE__ */ new Map();
+        for (const d of v.damages) {
+          const sec = Math.floor(d.At - start);
+          if (sec >= 0) {
+            dmgMap.set(sec, (dmgMap.get(sec) || 0) + d.Damage);
           }
-          return acc.concat([[normalizedTime, v2.Damage + ((last == null ? void 0 : last[1]) || 0)]]);
-        }, [[0, 0]]),
-        stacking: "normal",
-        dataGrouping: {
-          enabled: true,
-          units: [["minute", [1]]]
         }
-      }));
-      const allTicksSet = /* @__PURE__ */ new Set();
-      for (const s of series) {
-        for (const pt of s.data) {
-          allTicksSet.add(pt[0]);
-        }
-      }
-      const allTicks = Array.from(allTicksSet).sort((a, b) => a - b);
-      for (const s of series) {
-        const alignedData = [];
-        const dataMap = new Map(s.data);
-        let lastValue = 0;
-        for (const tick of allTicks) {
-          if (dataMap.has(tick)) {
-            lastValue = dataMap.get(tick);
+        return {
+          name: prettyEntityName(v.actor),
+          dmgMap
+        };
+      });
+      const series = playerBins.map((p2) => {
+        const data = [[0, 0]];
+        for (let t = 1; t <= duration; t++) {
+          let windowSum = 0;
+          for (let w = Math.max(0, t - 4); w <= t; w++) {
+            windowSum += p2.dmgMap.get(w) || 0;
           }
-          alignedData.push([tick, lastValue]);
+          const movingAverage = Math.round(windowSum / 5);
+          data.push([t * 1e3, movingAverage]);
         }
-        s.data = alignedData;
-      }
+        return {
+          type: "area",
+          name: p2.name,
+          data,
+          stacking: "normal"
+        };
+      });
       return series;
     };
     return {
@@ -20842,7 +20809,8 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
       showEntityDetailDamageList,
       getMabiNameColor,
       prettyEntityName,
-      currentTargetDuration
+      currentTargetDuration,
+      syncChart
     };
   }
 });
@@ -20865,7 +20833,7 @@ const chartOpt = {
       }
     }
   },
-  yAxis: { title: { text: "" } },
+  yAxis: { title: { text: "5秒移動平均傷害" } },
   tooltip: {
     valueDecimals: 0,
     shared: true,
@@ -20874,7 +20842,7 @@ const chartOpt = {
       const m = Math.floor(sec / 60);
       const s = sec % 60;
       const timeStr = `${m}:${s < 10 ? "0" : ""}${s}`;
-      let tooltipText = `<b>相對時間: ${timeStr}</b><br/>`;
+      let tooltipText = `<b>相對時間: ${timeStr} (5秒移動平均)</b><br/>`;
       this.points.forEach((point) => {
         tooltipText += `<span style="color:${point.color}">●</span> ${point.series.name}: <b>${point.y.toLocaleString()}</b><br/>`;
       });
@@ -25449,7 +25417,7 @@ const _hoisted_1$2 = {
 const _hoisted_2$1 = { class: "d-flex ma-2 ga-2 align-center flex-wrap" };
 const _hoisted_3$1 = /* @__PURE__ */ createBaseVNode("span", null, "活躍DPS僅計算傷害大於0的時段。若相鄰兩次攻擊間隔小於或等於緩衝時間（B 秒），會合併計算為同一次活躍攻擊區間。活躍區間僅向後延伸緩衝時間，且不超過對該敵人的最後一次攻擊時間。單次獨立攻擊的最少活躍時間為 1 秒。", -1);
 const _hoisted_4$1 = {
-  key: 0,
+  key: 1,
   class: "ml-2 font-weight-bold text-subtitle-2 text-grey-darken-3"
 };
 const _hoisted_5 = { class: "text-primary" };
@@ -25543,6 +25511,19 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
         "hide-details": "",
         class: "ml-2"
       }, null, 8, ["modelValue"]),
+      _ctx.targetId ? (openBlock(), createBlock(VBtn, {
+        key: 0,
+        color: "primary",
+        variant: "outlined",
+        density: "compact",
+        class: "ml-2",
+        onClick: _ctx.syncChart
+      }, {
+        default: withCtx(() => [
+          createTextVNode(" 圖表同步 ")
+        ]),
+        _: 1
+      }, 8, ["onClick"])) : createCommentVNode("", true),
       _ctx.targetId ? (openBlock(), createElementBlock("span", _hoisted_4$1, [
         createTextVNode(" 攻略總時間: "),
         createBaseVNode("span", _hoisted_5, toDisplayString(_ctx.currentTargetDuration), 1)
@@ -37325,4 +37306,4 @@ app.config.errorHandler = (err) => {
   console.error(err);
 };
 app.use(vuetify).mount("#app");
-//# sourceMappingURL=index-Dk2RYV6M.js.map
+//# sourceMappingURL=index-D7fb-mgn.js.map

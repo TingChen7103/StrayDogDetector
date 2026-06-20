@@ -21,6 +21,9 @@
         </v-text-field>
         <v-switch v-model="showBuffCoverage" label="顯示 Buff 覆蓋率" color="primary" density="compact" hide-details class="ml-2"></v-switch>
         <v-switch v-model="showDebuffCoverage" label="顯示 Debuff 覆蓋率" color="error" density="compact" hide-details class="ml-2"></v-switch>
+        <v-btn v-if="targetId" color="primary" variant="outlined" density="compact" class="ml-2" @click="syncChart">
+            圖表同步
+        </v-btn>
         <span v-if="targetId" class="ml-2 font-weight-bold text-subtitle-2 text-grey-darken-3">
             攻略總時間: <span class="text-primary">{{ currentTargetDuration }}</span>
         </span>
@@ -135,12 +138,7 @@ export default defineComponent({
         const chartDom = ref<HTMLElement>(undefined!);
         let chart: Highcharts.Chart = undefined!;
 
-        const chartData = computed(() => {
-            if (!targetId.value) {
-                return [];
-            }
-            return getChartSeriesData(pcEntities.value.filter(v => v.totalDamage > 10000));
-        });
+        // chartData computed ref removed as we do on-demand chart sync
 
         onUnmounted(() => {
             appEvent.value.removeEventListener('clear', clearTarget);
@@ -371,40 +369,20 @@ export default defineComponent({
             targetId.value = '';
         }
 
+        const syncChart = () => {
+            if (!targetId.value || !chartDom.value) {
+                return;
+            }
+            const latestSeries = getChartSeriesData(pcEntities.value.filter(v => v.totalDamage > 10000));
+            if (chart) {
+                chart.destroy();
+                chart = undefined!;
+            }
+            chart = highcharts.chart(chartDom.value, { ...chartOpt, series: latestSeries });
+        };
+
         onMounted(() => {
             appEvent.value.addEventListener('clear', clearTarget);
-
-            let debounced1 = 0;
-            watch(entityMap, () => {
-                if (debounced1) {
-                    return;
-                }
-
-                setTimeout(() => {
-                    debounced1 = 0;
-                    if (chart) {
-                        chart.destroy();
-                        chart = undefined!;
-                    }
-                    if (targetId.value && chartDom.value) {
-                        chart = highcharts.chart(chartDom.value, { ...chartOpt, series: chartData.value });
-                    }
-                }, 100);
-            });
-
-            let debounced2: number = 0;
-            watch(chartData, () => {
-                if (debounced2) {
-                    return;
-                }
-
-                debounced2 = setTimeout(() => {
-                    debounced2 = 0;
-                    if (targetId.value && chart) {
-                        chart.update({ series: chartData.value });
-                    }
-                }, 100);
-            });
 
             watch(targetId, (newVal) => {
                 if (!newVal) {
@@ -414,11 +392,7 @@ export default defineComponent({
                     }
                 } else {
                     setTimeout(() => {
-                        if (!chart && chartDom.value) {
-                            chart = highcharts.chart(chartDom.value, { ...chartOpt, series: chartData.value });
-                        } else if (chart) {
-                            chart.update({ series: chartData.value });
-                        }
+                        syncChart();
                     }, 100);
                 }
             });
@@ -455,50 +429,45 @@ export default defineComponent({
 
         const getChartSeriesData = (entity: EntityExtended[]): SeriesAreaOptions[] => {
             const start = combatTimeRange.value.start;
-            const series = entity.map((v): SeriesAreaOptions & { data: [number, number][] } => ({
-                type: 'area',
-                name: prettyEntityName(v.actor)!,
-                data: v.damages.reduce((acc, v) => {
-                    const relativeSec = Math.floor(v.At - start);
-                    const normalizedTime = (Math.floor(relativeSec / 60) + 1) * 60 * 1000;
-                    const last = acc[acc.length - 1];
-                    if (last && last[0] == normalizedTime) {
-                        last[1] += v.Damage;
-                        return acc;
+            const end = combatTimeRange.value.end;
+            const duration = Math.ceil(end - start);
+
+            // Build 1-second bins of damage for each player
+            const playerBins = entity.map(v => {
+                const dmgMap = new Map<number, number>();
+                for (const d of v.damages) {
+                    const sec = Math.floor(d.At - start);
+                    if (sec >= 0) {
+                        dmgMap.set(sec, (dmgMap.get(sec) || 0) + d.Damage);
                     }
-
-                    return acc.concat([[normalizedTime, v.Damage + (last?.[1] || 0)]]);
-                }, [[0, 0]] as [number, number][]),
-                stacking: 'normal',
-                dataGrouping: {
-                    enabled: true,
-                    units: [['minute', [1]]],
-                },
-            }));
-
-            // Collect all unique relative timestamps across all players
-            const allTicksSet = new Set<number>();
-            for (const s of series) {
-                for (const pt of s.data) {
-                    allTicksSet.add(pt[0]);
                 }
-            }
-            const allTicks = Array.from(allTicksSet).sort((a, b) => a - b);
+                return {
+                    name: prettyEntityName(v.actor)!,
+                    dmgMap
+                };
+            });
 
-            // Align each series to have a point at every timestamp in allTicks
-            for (const s of series) {
-                const alignedData: [number, number][] = [];
-                const dataMap = new Map<number, number>(s.data);
-                
-                let lastValue = 0;
-                for (const tick of allTicks) {
-                    if (dataMap.has(tick)) {
-                        lastValue = dataMap.get(tick)!;
+            // Calculate 5-second moving average for each second from 0 to duration
+            const series = playerBins.map((p): SeriesAreaOptions & { data: [number, number][] } => {
+                const data: [number, number][] = [[0, 0]]; // Start with [0, 0] at relative time 0
+
+                for (let t = 1; t <= duration; t++) {
+                    // Sum damages in window [t-4, t]
+                    let windowSum = 0;
+                    for (let w = Math.max(0, t - 4); w <= t; w++) {
+                        windowSum += p.dmgMap.get(w) || 0;
                     }
-                    alignedData.push([tick, lastValue]);
+                    const movingAverage = Math.round(windowSum / 5);
+                    data.push([t * 1000, movingAverage]);
                 }
-                s.data = alignedData;
-            }
+
+                return {
+                    type: 'area',
+                    name: p.name,
+                    data,
+                    stacking: 'normal',
+                };
+            });
 
             return series;
         };
@@ -528,6 +497,7 @@ export default defineComponent({
             getMabiNameColor,
             prettyEntityName,
             currentTargetDuration,
+            syncChart,
         }
     }
 });
@@ -563,7 +533,7 @@ const chartOpt: Options = {
             }
         }
     },
-    yAxis: { title: { text: '' } },
+    yAxis: { title: { text: '5秒移動平均傷害' } },
     tooltip: {
         valueDecimals: 0,
         shared: true,
@@ -572,7 +542,7 @@ const chartOpt: Options = {
             const m = Math.floor(sec / 60);
             const s = sec % 60;
             const timeStr = `${m}:${s < 10 ? '0' : ''}${s}`;
-            let tooltipText = `<b>相對時間: ${timeStr}</b><br/>`;
+            let tooltipText = `<b>相對時間: ${timeStr} (5秒移動平均)</b><br/>`;
             this.points.forEach((point: any) => {
                 tooltipText += `<span style="color:${point.color}">\u25CF</span> ${point.series.name}: <b>${point.y.toLocaleString()}</b><br/>`;
             });
