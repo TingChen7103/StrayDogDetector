@@ -20638,6 +20638,7 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
     });
     const targetId = ref("");
     const activeDpsBuffer = ref(10);
+    const chartWindowSize = ref(5);
     const calculateActiveDps = (damages, buffer) => {
       const validDamages = damages.filter((d) => d.Damage > 0);
       if (validDamages.length === 0) {
@@ -20740,7 +20741,7 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
         return;
       }
       try {
-        const latestSeries = getChartSeriesData(pcEntities.value.filter((v) => v.totalDamage > 1e4));
+        const latestSeries = getChartSeriesData(pcEntities.value.filter((v) => v.totalDamage > 1e4), chartWindowSize.value);
         if (mySyncId !== currentSyncId) {
           return;
         }
@@ -20748,7 +20749,29 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
           chart.destroy();
           chart = void 0;
         }
-        chart = highcharts.chart(chartDom.value, { ...chartOpt, series: latestSeries });
+        const dynamicChartOpt = {
+          ...chartOpt,
+          yAxis: {
+            title: { text: `${chartWindowSize.value}秒 DPS` }
+          },
+          tooltip: {
+            valueDecimals: 0,
+            shared: true,
+            formatter: function() {
+              const sec = Math.floor(this.x / 1e3);
+              const m = Math.floor(sec / 60);
+              const s = sec % 60;
+              const timeStr = `${m}:${s < 10 ? "0" : ""}${s}`;
+              let tooltipText = `<b>相對時間: ${timeStr} (${chartWindowSize.value}秒 DPS)</b><br/>`;
+              this.points.forEach((point) => {
+                tooltipText += `<span style="color:${point.color}">●</span> ${point.series.name}: <b>${point.y.toLocaleString()}</b><br/>`;
+              });
+              return tooltipText;
+            }
+          },
+          series: latestSeries
+        };
+        chart = highcharts.chart(chartDom.value, dynamicChartOpt);
         await new Promise((resolve2) => setTimeout(resolve2, 150));
       } finally {
         if (mySyncId === currentSyncId) {
@@ -20758,7 +20781,7 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
     };
     onMounted(() => {
       appEvent2.value.addEventListener("clear", clearTarget);
-      watch([targetId, pcEntities], () => {
+      watch([targetId, pcEntities, chartWindowSize], () => {
         syncChart();
       }, { immediate: true, flush: "post" });
     });
@@ -20781,7 +20804,7 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
       }
       return entity.name;
     };
-    const getChartSeriesData = (entity) => {
+    const getChartSeriesData = (entity, windowSize) => {
       const start = combatTimeRange.value.start;
       const end = combatTimeRange.value.end;
       const duration = Math.ceil(end - start);
@@ -20802,10 +20825,10 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
         const data = [[0, 0]];
         for (let t = 1; t <= duration; t++) {
           let windowSum = 0;
-          for (let w = Math.max(0, t - 4); w <= t; w++) {
+          for (let w = Math.max(0, t - (windowSize - 1)); w <= t; w++) {
             windowSum += p2.dmgMap.get(w) || 0;
           }
-          const movingAverage = Math.round(windowSum / 5);
+          const movingAverage = Math.round(windowSum / windowSize);
           data.push([t * 1e3, movingAverage]);
         }
         return {
@@ -20825,6 +20848,7 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
       targetId,
       targetIdList,
       activeDpsBuffer,
+      chartWindowSize,
       calculateActiveDps,
       calculateCriticalRate,
       showBuffCoverage,
@@ -25546,9 +25570,21 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
         ]),
         _: 1
       }, 8, ["modelValue"]),
+      createVNode(VTextField, {
+        modelValue: _ctx.chartWindowSize,
+        "onUpdate:modelValue": _cache[2] || (_cache[2] = ($event) => _ctx.chartWindowSize = $event),
+        modelModifiers: { number: true },
+        type: "number",
+        min: "1",
+        label: "圖表窗格 (秒)",
+        variant: "outlined",
+        density: "compact",
+        "hide-details": "",
+        style: { "max-width": "150px", "min-width": "100px" }
+      }, null, 8, ["modelValue"]),
       createVNode(VSwitch, {
         modelValue: _ctx.showBuffCoverage,
-        "onUpdate:modelValue": _cache[2] || (_cache[2] = ($event) => _ctx.showBuffCoverage = $event),
+        "onUpdate:modelValue": _cache[3] || (_cache[3] = ($event) => _ctx.showBuffCoverage = $event),
         label: "顯示 Buff 覆蓋率",
         color: "primary",
         density: "compact",
@@ -25557,7 +25593,7 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
       }, null, 8, ["modelValue"]),
       createVNode(VSwitch, {
         modelValue: _ctx.showDebuffCoverage,
-        "onUpdate:modelValue": _cache[3] || (_cache[3] = ($event) => _ctx.showDebuffCoverage = $event),
+        "onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => _ctx.showDebuffCoverage = $event),
         label: "顯示 Debuff 覆蓋率",
         color: "error",
         density: "compact",
@@ -25728,7 +25764,7 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
     }), 128)),
     createVNode(VDialog, {
       modelValue: _ctx.detailDialog,
-      "onUpdate:modelValue": _cache[5] || (_cache[5] = ($event) => _ctx.detailDialog = $event),
+      "onUpdate:modelValue": _cache[6] || (_cache[6] = ($event) => _ctx.detailDialog = $event),
       "min-width": "60vw",
       height: "90svh"
     }, {
@@ -25753,7 +25789,7 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
                 createVNode(VBtn, {
                   color: "primary",
                   block: "",
-                  onClick: _cache[4] || (_cache[4] = ($event) => _ctx.detailDialog = false)
+                  onClick: _cache[5] || (_cache[5] = ($event) => _ctx.detailDialog = false)
                 }, {
                   default: withCtx(() => [
                     createTextVNode("Close")
@@ -37357,4 +37393,4 @@ app.config.errorHandler = (err) => {
   console.error(err);
 };
 app.use(vuetify).mount("#app");
-//# sourceMappingURL=index-DYL9HUp9.js.map
+//# sourceMappingURL=index-B_fR68ad.js.map

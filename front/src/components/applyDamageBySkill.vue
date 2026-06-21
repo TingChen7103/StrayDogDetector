@@ -29,6 +29,9 @@
                 </v-tooltip>
             </template>
         </v-text-field>
+        <v-text-field v-model.number="chartWindowSize" type="number" min="1" label="圖表窗格 (秒)"
+            variant="outlined" density="compact" hide-details style="max-width: 150px; min-width: 100px;">
+        </v-text-field>
         <v-switch v-model="showBuffCoverage" label="顯示 Buff 覆蓋率" color="primary" density="compact" hide-details class="ml-2"></v-switch>
         <v-switch v-model="showDebuffCoverage" label="顯示 Debuff 覆蓋率" color="error" density="compact" hide-details class="ml-2"></v-switch>
         <v-btn v-if="allApplyDamage > 0" color="primary" variant="outlined" density="compact" class="ml-2" @click="syncChart">
@@ -292,6 +295,7 @@ export default defineComponent({
 
         const targetId = ref('');
         const activeDpsBuffer = ref(10);
+        const chartWindowSize = ref(5);
 
         const calculateActiveDps = (damages: EntityDamage[], buffer: number): number => {
             const validDamages = damages.filter(d => d.Damage > 0);
@@ -424,7 +428,7 @@ export default defineComponent({
             }
 
             try {
-                const latestSeries = getChartSeriesData(pcEntities.value.filter(v => v.totalDamage > 10000));
+                const latestSeries = getChartSeriesData(pcEntities.value.filter(v => v.totalDamage > 10000), chartWindowSize.value);
                 if (mySyncId !== currentSyncId) {
                     return;
                 }
@@ -433,7 +437,29 @@ export default defineComponent({
                     chart.destroy();
                     chart = undefined!;
                 }
-                chart = highcharts.chart(chartDom.value, { ...chartOpt, series: latestSeries });
+                const dynamicChartOpt: Options = {
+                    ...chartOpt,
+                    yAxis: { 
+                        title: { text: `${chartWindowSize.value}秒 DPS` } 
+                    },
+                    tooltip: {
+                        valueDecimals: 0,
+                        shared: true,
+                        formatter: function (this: any) {
+                            const sec = Math.floor(this.x / 1000);
+                            const m = Math.floor(sec / 60);
+                            const s = sec % 60;
+                            const timeStr = `${m}:${s < 10 ? '0' : ''}${s}`;
+                            let tooltipText = `<b>相對時間: ${timeStr} (${chartWindowSize.value}秒 DPS)</b><br/>`;
+                            this.points.forEach((point: any) => {
+                                tooltipText += `<span style="color:${point.color}">\u25CF</span> ${point.series.name}: <b>${point.y.toLocaleString()}</b><br/>`;
+                            });
+                            return tooltipText;
+                        }
+                    },
+                    series: latestSeries
+                };
+                chart = highcharts.chart(chartDom.value, dynamicChartOpt);
                 // 額外延遲，確保瀏覽器在關閉遮罩前已完成圖表繪製渲染
                 await new Promise(resolve => setTimeout(resolve, 150));
             } finally {
@@ -447,7 +473,7 @@ export default defineComponent({
             appEvent.value.addEventListener('clear', clearTarget);
 
             // 使用 flush: 'post' 確保在 DOM 更新完成後才觸發，避免 initial render 時 ref 尚未綁定
-            watch([targetId, pcEntities], () => {
+            watch([targetId, pcEntities, chartWindowSize], () => {
                 syncChart();
             }, { immediate: true, flush: 'post' });
         })
@@ -481,7 +507,7 @@ export default defineComponent({
             return entity.name;
         }
 
-        const getChartSeriesData = (entity: EntityExtended[]): any[] => {
+        const getChartSeriesData = (entity: EntityExtended[], windowSize: number): any[] => {
             const start = combatTimeRange.value.start;
             const end = combatTimeRange.value.end;
             const duration = Math.ceil(end - start);
@@ -501,17 +527,17 @@ export default defineComponent({
                 };
             });
 
-            // Calculate 5-second moving average for each second from 0 to duration
+            // Calculate moving average for each second from 0 to duration
             const series = playerBins.map((p): any => {
                 const data: [number, number][] = [[0, 0]]; // Start with [0, 0] at relative time 0
 
                 for (let t = 1; t <= duration; t++) {
-                    // Sum damages in window [t-4, t]
+                    // Sum damages in window [t - (windowSize - 1), t]
                     let windowSum = 0;
-                    for (let w = Math.max(0, t - 4); w <= t; w++) {
+                    for (let w = Math.max(0, t - (windowSize - 1)); w <= t; w++) {
                         windowSum += p.dmgMap.get(w) || 0;
                     }
-                    const movingAverage = Math.round(windowSum / 5);
+                    const movingAverage = Math.round(windowSum / windowSize);
                     data.push([t * 1000, movingAverage]);
                 }
 
@@ -535,6 +561,7 @@ export default defineComponent({
             targetId,
             targetIdList,
             activeDpsBuffer,
+            chartWindowSize,
             calculateActiveDps,
             calculateCriticalRate,
             showBuffCoverage,
