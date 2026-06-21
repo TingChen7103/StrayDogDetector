@@ -20602,20 +20602,24 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
     });
     const pcEntities = computed(() => Object.values(entityMapWithTargetData.value).filter((v) => v.actor.isPC).sort((a, b) => b.totalDamage - a.totalDamage));
     const combatTimeRange = computed(() => {
-      if (!targetId.value) {
-        return { start: 0, end: 0, duration: 0 };
-      }
-      const dmgs = targetDC.value.groupedDamages[targetId.value] || [];
+      const dmgs = !targetId.value ? targetDC.value.damages || [] : targetDC.value.groupedDamages[targetId.value] || [];
       if (dmgs.length === 0) {
         return { start: 0, end: 0, duration: 0 };
       }
-      const validDmgs = dmgs.filter((d) => d.Damage > 0);
-      if (validDmgs.length === 0) {
+      let start = Infinity;
+      let end = -Infinity;
+      let hasValid = false;
+      for (let i = 0; i < dmgs.length; i++) {
+        const d = dmgs[i];
+        if (d.Damage > 0) {
+          hasValid = true;
+          if (d.At < start) start = d.At;
+          if (d.At > end) end = d.At;
+        }
+      }
+      if (!hasValid) {
         return { start: 0, end: 0, duration: 0 };
       }
-      const times = validDmgs.map((d) => d.At);
-      const start = Math.min(...times);
-      const end = Math.max(...times);
       return { start, end, duration: end - start };
     });
     const formatDuration = (seconds) => {
@@ -20625,9 +20629,6 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
       return `${m}:${remainingS < 10 ? "0" : ""}${remainingS}`;
     };
     const currentTargetDuration = computed(() => {
-      if (!targetId.value) {
-        return "0:00";
-      }
       const start = combatTimeRange.value.start;
       const end = combatTimeRange.value.end;
       if (start === 0 || end === 0) {
@@ -20721,31 +20722,45 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
     const clearTarget = () => {
       targetId.value = "";
     };
-    const syncChart = () => {
-      if (!targetId.value || !chartDom.value) {
+    let currentSyncId = 0;
+    const isChartLoading = ref(false);
+    const syncChart = async () => {
+      const mySyncId = ++currentSyncId;
+      if (!chartDom.value || allApplyDamage.value === 0 || combatTimeRange.value.duration <= 0) {
+        if (chart) {
+          chart.destroy();
+          chart = void 0;
+        }
+        isChartLoading.value = false;
         return;
       }
-      const latestSeries = getChartSeriesData(pcEntities.value.filter((v) => v.totalDamage > 1e4));
-      if (chart) {
-        chart.destroy();
-        chart = void 0;
+      isChartLoading.value = true;
+      await new Promise((resolve2) => setTimeout(resolve2, 50));
+      if (mySyncId !== currentSyncId) {
+        return;
       }
-      chart = highcharts.chart(chartDom.value, { ...chartOpt, series: latestSeries });
+      try {
+        const latestSeries = getChartSeriesData(pcEntities.value.filter((v) => v.totalDamage > 1e4));
+        if (mySyncId !== currentSyncId) {
+          return;
+        }
+        if (chart) {
+          chart.destroy();
+          chart = void 0;
+        }
+        chart = highcharts.chart(chartDom.value, { ...chartOpt, series: latestSeries });
+        await new Promise((resolve2) => setTimeout(resolve2, 150));
+      } finally {
+        if (mySyncId === currentSyncId) {
+          isChartLoading.value = false;
+        }
+      }
     };
     onMounted(() => {
       appEvent2.value.addEventListener("clear", clearTarget);
-      watch(targetId, (newVal) => {
-        if (!newVal) {
-          if (chart) {
-            chart.destroy();
-            chart = void 0;
-          }
-        } else {
-          setTimeout(() => {
-            syncChart();
-          }, 100);
-        }
-      });
+      watch([targetId, pcEntities], () => {
+        syncChart();
+      }, { immediate: true, flush: "post" });
     });
     const allApplyDamage = computed(() => pcEntities.value.reduce((acc, v) => acc + v.totalDamage, 0));
     const detailDialog = ref(false);
@@ -20794,10 +20809,9 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
           data.push([t * 1e3, movingAverage]);
         }
         return {
-          type: "area",
+          type: "line",
           name: p2.name,
-          data,
-          stacking: "normal"
+          data
         };
       });
       return series;
@@ -20825,6 +20839,7 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
       getMabiNameColor,
       prettyEntityName,
       currentTargetDuration,
+      isChartLoading,
       syncChart
     };
   }
@@ -20835,7 +20850,15 @@ const chartOpt = {
   },
   title: { text: "" },
   chart: {
-    zooming: { type: "x" }
+    zooming: { type: "x" },
+    animation: false
+    // 關閉圖表整體載入動畫以提升效能
+  },
+  plotOptions: {
+    series: {
+      animation: false
+      // 關閉數據線條/面積動畫，避免大數據時背景渲染卡頓
+    }
   },
   xAxis: {
     type: "datetime",
@@ -25425,40 +25448,54 @@ const VSwitch = genericComponent()({
     return {};
   }
 });
-const _hoisted_1$2 = {
+const _hoisted_1$2 = /* @__PURE__ */ createBaseVNode("div", { class: "text-h4 font-weight-bold text-grey-lighten-1" }, "Loading...", -1);
+const _hoisted_2$1 = {
   ref: "chartDom",
   style: { "width": "100svw", "height": "300px" }
 };
-const _hoisted_2$1 = { class: "d-flex ma-2 ga-2 align-center flex-wrap" };
-const _hoisted_3$1 = /* @__PURE__ */ createBaseVNode("span", null, "活躍DPS僅計算傷害大於0的時段。若相鄰兩次攻擊間隔小於或等於緩衝時間（B 秒），會合併計算為同一次活躍攻擊區間。活躍區間僅向後延伸緩衝時間，且不超過對該敵人的最後一次攻擊時間。單次獨立攻擊的最少活躍時間為 1 秒。", -1);
-const _hoisted_4$1 = {
+const _hoisted_3$1 = { class: "d-flex ma-2 ga-2 align-center flex-wrap" };
+const _hoisted_4$1 = /* @__PURE__ */ createBaseVNode("span", null, "活躍DPS僅計算傷害大於0的時段。若相鄰兩次攻擊間隔小於或等於緩衝時間（B 秒），會合併計算為同一次活躍攻擊區間。活躍區間僅向後延伸緩衝時間，且不超過對該敵人的最後一次攻擊時間。單次獨立攻擊的最少活躍時間為 1 秒。", -1);
+const _hoisted_5 = {
   key: 1,
   class: "ml-2 font-weight-bold text-subtitle-2 text-grey-darken-3"
 };
-const _hoisted_5 = { class: "text-primary" };
-const _hoisted_6 = { class: "font-weight-bold" };
-const _hoisted_7 = { class: "text-grey" };
-const _hoisted_8 = { class: "text-primary font-weight-bold" };
-const _hoisted_9 = { class: "text-deep-orange font-weight-bold" };
-const _hoisted_10 = ["src"];
-const _hoisted_11 = {
+const _hoisted_6 = { class: "text-primary" };
+const _hoisted_7 = { class: "font-weight-bold" };
+const _hoisted_8 = { class: "text-grey" };
+const _hoisted_9 = { class: "text-primary font-weight-bold" };
+const _hoisted_10 = { class: "text-deep-orange font-weight-bold" };
+const _hoisted_11 = ["src"];
+const _hoisted_12 = {
   key: 0,
   class: "d-flex flex-wrap align-center mt-1",
   style: { "gap": "8px" }
 };
-const _hoisted_12 = ["src"];
+const _hoisted_13 = ["src"];
 function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
   const _component_damage_list = resolveComponent("damage-list");
   return openBlock(), createElementBlock(Fragment, null, [
-    withDirectives(createVNode(VSheet, null, {
+    withDirectives(createVNode(VSheet, { class: "position-relative" }, {
       default: withCtx(() => [
-        createBaseVNode("div", _hoisted_1$2, null, 512)
+        createVNode(VOverlay, {
+          "model-value": _ctx.isChartLoading,
+          contained: "",
+          persistent: "",
+          class: "align-center justify-center",
+          scrim: "#121212",
+          opacity: "0.8"
+        }, {
+          default: withCtx(() => [
+            _hoisted_1$2
+          ]),
+          _: 1
+        }, 8, ["model-value"]),
+        createBaseVNode("div", _hoisted_2$1, null, 512)
       ]),
       _: 1
     }, 512), [
-      [vShow, _ctx.targetId]
+      [vShow, _ctx.allApplyDamage > 0]
     ]),
-    createBaseVNode("div", _hoisted_2$1, [
+    createBaseVNode("div", _hoisted_3$1, [
       createVNode(VSelect, {
         modelValue: _ctx.targetId,
         "onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => _ctx.targetId = $event),
@@ -25502,7 +25539,7 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
               }, 1040)
             ]),
             default: withCtx(() => [
-              _hoisted_3$1
+              _hoisted_4$1
             ]),
             _: 1
           })
@@ -25527,7 +25564,7 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
         "hide-details": "",
         class: "ml-2"
       }, null, 8, ["modelValue"]),
-      _ctx.targetId ? (openBlock(), createBlock(VBtn, {
+      _ctx.allApplyDamage > 0 ? (openBlock(), createBlock(VBtn, {
         key: 0,
         color: "primary",
         variant: "outlined",
@@ -25540,9 +25577,9 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
         ]),
         _: 1
       }, 8, ["onClick"])) : createCommentVNode("", true),
-      _ctx.targetId ? (openBlock(), createElementBlock("span", _hoisted_4$1, [
+      _ctx.allApplyDamage > 0 ? (openBlock(), createElementBlock("span", _hoisted_5, [
         createTextVNode(" 攻略總時間: "),
-        createBaseVNode("span", _hoisted_5, toDisplayString(_ctx.currentTargetDuration), 1)
+        createBaseVNode("span", _hoisted_6, toDisplayString(_ctx.currentTargetDuration), 1)
       ])) : createCommentVNode("", true)
     ]),
     (openBlock(true), createElementBlock(Fragment, null, renderList(_ctx.pcEntities, (v) => {
@@ -25561,9 +25598,9 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
                       style: { "gap": "12px" }
                     }, {
                       default: withCtx(() => [
-                        createBaseVNode("span", _hoisted_6, toDisplayString(_ctx.prettyEntityName(v.actor)), 1),
+                        createBaseVNode("span", _hoisted_7, toDisplayString(_ctx.prettyEntityName(v.actor)), 1),
                         createBaseVNode("span", null, "傷害: " + toDisplayString(v.totalDamage.toFixed(0)), 1),
-                        createBaseVNode("span", _hoisted_7, "(" + toDisplayString((100 * v.totalDamage / _ctx.allApplyDamage).toFixed(1)) + "%)", 1),
+                        createBaseVNode("span", _hoisted_8, "(" + toDisplayString((100 * v.totalDamage / _ctx.allApplyDamage).toFixed(1)) + "%)", 1),
                         createVNode(VDivider, {
                           vertical: "",
                           class: "mx-1"
@@ -25573,12 +25610,12 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
                           vertical: "",
                           class: "mx-1"
                         }),
-                        createBaseVNode("span", _hoisted_8, "活躍DPS: " + toDisplayString(_ctx.calculateActiveDps(v.damages, _ctx.activeDpsBuffer)), 1),
+                        createBaseVNode("span", _hoisted_9, "活躍DPS: " + toDisplayString(_ctx.calculateActiveDps(v.damages, _ctx.activeDpsBuffer)), 1),
                         createVNode(VDivider, {
                           vertical: "",
                           class: "mx-1"
                         }),
-                        createBaseVNode("span", _hoisted_9, "暴擊率: " + toDisplayString(_ctx.calculateCriticalRate(v.damages)), 1)
+                        createBaseVNode("span", _hoisted_10, "暴擊率: " + toDisplayString(_ctx.calculateCriticalRate(v.damages)), 1)
                       ]),
                       _: 2
                     }, 1024)
@@ -25602,7 +25639,7 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
                                 width: "32",
                                 height: "32",
                                 src: `/res/skillimage/${_ctx.region}/${skillId}/${skillId}.png`
-                              }, null, 8, _hoisted_10)
+                              }, null, 8, _hoisted_11)
                             ]),
                             _: 2
                           }, 1024),
@@ -25619,7 +25656,7 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
                                   var _a, _b;
                                   return [
                                     createBaseVNode("div", null, toDisplayString(_ctx.skillNameMap[+skillId] || `unknownSkill:${skillId}`) + " damage: " + toDisplayString(damageBySkill.toFixed(0)) + " count: " + toDisplayString(v.groupedCount[+skillId]) + " avgDamage: " + toDisplayString((v.groupedCount[+skillId] ? damageBySkill / v.groupedCount[+skillId] : 0).toFixed(0)) + " minDamage: " + toDisplayString(((_a = v.groupedMinDamages[+skillId]) == null ? void 0 : _a.toFixed(0)) || "0") + " maxDamage: " + toDisplayString(((_b = v.groupedMaxDamages[+skillId]) == null ? void 0 : _b.toFixed(0)) || "0") + " " + toDisplayString((100 * damageBySkill / v.totalDamage).toFixed(1)) + "% ", 1),
-                                    (_ctx.showBuffCoverage || _ctx.showDebuffCoverage) && _ctx.getSkillConditionCoverage(v.groupedDamages[skillId], _ctx.showBuffCoverage, _ctx.showDebuffCoverage).length > 0 ? (openBlock(), createElementBlock("div", _hoisted_11, [
+                                    (_ctx.showBuffCoverage || _ctx.showDebuffCoverage) && _ctx.getSkillConditionCoverage(v.groupedDamages[skillId], _ctx.showBuffCoverage, _ctx.showDebuffCoverage).length > 0 ? (openBlock(), createElementBlock("div", _hoisted_12, [
                                       (openBlock(true), createElementBlock(Fragment, null, renderList(_ctx.getSkillConditionCoverage(v.groupedDamages[skillId], _ctx.showBuffCoverage, _ctx.showDebuffCoverage), (c) => {
                                         return openBlock(), createElementBlock("div", {
                                           key: c.ccId,
@@ -25630,7 +25667,7 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
                                             width: "16",
                                             height: "16",
                                             src: `/res/characterconditionimage/${_ctx.region}/${c.ccId}/${c.ccId}.png`
-                                          }, null, 8, _hoisted_12),
+                                          }, null, 8, _hoisted_13),
                                           createBaseVNode("span", null, [
                                             createTextVNode(toDisplayString(_ctx.condNameMap[c.ccId] || `CC:${c.ccId}`) + ": ", 1),
                                             createBaseVNode("b", null, toDisplayString(c.percentage.toFixed(1)) + "%", 1)
@@ -25893,7 +25930,8 @@ const _sfc_main = /* @__PURE__ */ defineComponent$1({
     const socketConnected = ref(false);
     const socket = new SocketClient(`/ws`);
     socket.onConnect = (isConnected) => socketConnected.value = isConnected;
-    socket.onEvent = (event) => actorManager2.value.onEvent(event);
+    socket.onEvent = (event) => {
+    };
     const loadJsonData = (jsonStr) => {
       let lastPos = 0;
       let count = 0;
@@ -25971,26 +26009,17 @@ const _sfc_main = /* @__PURE__ */ defineComponent$1({
       }
     };
     const loadFromServer = async () => {
-      const prevHandler = socket.onEvent;
-      const temporaryStore = [];
       try {
         const res = await fetch("/api/packet_log");
         if (!res.ok) {
           throw new Error(`failed to fetch data ${res.status}`);
         }
-        socket.onEvent = (e) => temporaryStore.push(e);
         const jsonData = await res.text();
         clearData();
         loadJsonData(jsonData);
       } catch (e) {
         console.error(e);
         alert(`failed to load data ${e}`);
-      } finally {
-        socket.onEvent = prevHandler;
-        for (const e of temporaryStore) {
-          actorManager2.value.onEvent(e);
-        }
-        temporaryStore.length = 0;
       }
     };
     const tab = ref("");
@@ -26039,6 +26068,7 @@ const _sfc_main = /* @__PURE__ */ defineComponent$1({
       regionList2.value = ["kr", "krt", "cn", "jp", "tw", "us"];
       langList2.value = ["kr", "krt", "cn", "jp", "tw", "us"];
       await reloadDbData();
+      await loadFromServer();
       socket.connect();
     });
     return {
@@ -37327,4 +37357,4 @@ app.config.errorHandler = (err) => {
   console.error(err);
 };
 app.use(vuetify).mount("#app");
-//# sourceMappingURL=index-DhWceN7R.js.map
+//# sourceMappingURL=index-DYL9HUp9.js.map

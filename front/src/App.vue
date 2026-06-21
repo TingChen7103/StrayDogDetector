@@ -100,7 +100,9 @@ export default defineComponent({
         const socketConnected = ref(false);
         const socket = new SocketClient(`/ws`);
         socket.onConnect = isConnected => socketConnected.value = isConnected;
-        socket.onEvent = (event) => actorManager.value.onEvent(event);
+        socket.onEvent = (event) => {
+            // Discard incoming WS events to prevent automatic live updates
+        };
 
         const loadJsonData = (jsonStr: string) => {
             let lastPos = 0;
@@ -202,16 +204,12 @@ export default defineComponent({
         }
 
         const loadFromServer = async () => {
-            const prevHandler = socket.onEvent;
-            const temporaryStore = [] as eventBase[];
-
             try {
                 const res = await fetch('/api/packet_log');
                 if (!res.ok) {
                     throw new Error(`failed to fetch data ${res.status}`);
                 }
 
-                socket.onEvent = (e) => temporaryStore.push(e);
                 const jsonData = await res.text();
 
                 clearData();
@@ -220,14 +218,6 @@ export default defineComponent({
             catch (e) {
                 console.error(e);
                 alert(`failed to load data ${e}`);
-            }
-            finally {
-                socket.onEvent = prevHandler;
-
-                for (const e of temporaryStore) {
-                    actorManager.value.onEvent(e);
-                }
-                temporaryStore.length = 0;
             }
         }
 
@@ -293,6 +283,7 @@ export default defineComponent({
 
             // 初始載入
             await reloadDbData();
+            await loadFromServer();
 
             socket.connect();
         });

@@ -1,5 +1,15 @@
 <template>
-    <v-sheet v-show="targetId">
+    <v-sheet v-show="allApplyDamage > 0" class="position-relative">
+        <v-overlay
+            :model-value="isChartLoading"
+            contained
+            persistent
+            class="align-center justify-center"
+            scrim="#121212"
+            opacity="0.8"
+        >
+            <div class="text-h4 font-weight-bold text-grey-lighten-1">Loading...</div>
+        </v-overlay>
         <div ref="chartDom" style="width: 100svw; height: 300px;"></div>
     </v-sheet>
 
@@ -21,10 +31,10 @@
         </v-text-field>
         <v-switch v-model="showBuffCoverage" label="顯示 Buff 覆蓋率" color="primary" density="compact" hide-details class="ml-2"></v-switch>
         <v-switch v-model="showDebuffCoverage" label="顯示 Debuff 覆蓋率" color="error" density="compact" hide-details class="ml-2"></v-switch>
-        <v-btn v-if="targetId" color="primary" variant="outlined" density="compact" class="ml-2" @click="syncChart">
+        <v-btn v-if="allApplyDamage > 0" color="primary" variant="outlined" density="compact" class="ml-2" @click="syncChart">
             圖表同步
         </v-btn>
-        <span v-if="targetId" class="ml-2 font-weight-bold text-subtitle-2 text-grey-darken-3">
+        <span v-if="allApplyDamage > 0" class="ml-2 font-weight-bold text-subtitle-2 text-grey-darken-3">
             攻略總時間: <span class="text-primary">{{ currentTargetDuration }}</span>
         </span>
     </div>
@@ -241,20 +251,26 @@ export default defineComponent({
             Object.values(entityMapWithTargetData.value).filter(v => v.actor.isPC).sort((a, b) => b.totalDamage - a.totalDamage));
 
         const combatTimeRange = computed(() => {
-            if (!targetId.value) {
-                return { start: 0, end: 0, duration: 0 };
-            }
-            const dmgs = targetDC.value.groupedDamages[targetId.value] || [];
+            const dmgs = !targetId.value 
+                ? (targetDC.value.damages || []) 
+                : (targetDC.value.groupedDamages[targetId.value] || []);
             if (dmgs.length === 0) {
                 return { start: 0, end: 0, duration: 0 };
             }
-            const validDmgs = dmgs.filter(d => d.Damage > 0);
-            if (validDmgs.length === 0) {
+            let start = Infinity;
+            let end = -Infinity;
+            let hasValid = false;
+            for (let i = 0; i < dmgs.length; i++) {
+                const d = dmgs[i];
+                if (d.Damage > 0) {
+                    hasValid = true;
+                    if (d.At < start) start = d.At;
+                    if (d.At > end) end = d.At;
+                }
+            }
+            if (!hasValid) {
                 return { start: 0, end: 0, duration: 0 };
             }
-            const times = validDmgs.map(d => d.At);
-            const start = Math.min(...times);
-            const end = Math.max(...times);
             return { start, end, duration: end - start };
         });
 
@@ -266,9 +282,6 @@ export default defineComponent({
         };
 
         const currentTargetDuration = computed(() => {
-            if (!targetId.value) {
-                return '0:00';
-            }
             const start = combatTimeRange.value.start;
             const end = combatTimeRange.value.end;
             if (start === 0 || end === 0) {
@@ -387,33 +400,56 @@ export default defineComponent({
             targetId.value = '';
         }
 
-        const syncChart = () => {
-            if (!targetId.value || !chartDom.value) {
+        let currentSyncId = 0;
+        const isChartLoading = ref(false);
+
+        const syncChart = async () => {
+            const mySyncId = ++currentSyncId;
+
+            if (!chartDom.value || allApplyDamage.value === 0 || combatTimeRange.value.duration <= 0) {
+                if (chart) {
+                    chart.destroy();
+                    chart = undefined!;
+                }
+                isChartLoading.value = false;
                 return;
             }
-            const latestSeries = getChartSeriesData(pcEntities.value.filter(v => v.totalDamage > 10000));
-            if (chart) {
-                chart.destroy();
-                chart = undefined!;
+
+            isChartLoading.value = true;
+            // 延遲以允許 DOM 更新並顯示 Loading 遮罩
+            await new Promise(resolve => setTimeout(resolve, 50));
+
+            if (mySyncId !== currentSyncId) {
+                return;
             }
-            chart = highcharts.chart(chartDom.value, { ...chartOpt, series: latestSeries });
+
+            try {
+                const latestSeries = getChartSeriesData(pcEntities.value.filter(v => v.totalDamage > 10000));
+                if (mySyncId !== currentSyncId) {
+                    return;
+                }
+
+                if (chart) {
+                    chart.destroy();
+                    chart = undefined!;
+                }
+                chart = highcharts.chart(chartDom.value, { ...chartOpt, series: latestSeries });
+                // 額外延遲，確保瀏覽器在關閉遮罩前已完成圖表繪製渲染
+                await new Promise(resolve => setTimeout(resolve, 150));
+            } finally {
+                if (mySyncId === currentSyncId) {
+                    isChartLoading.value = false;
+                }
+            }
         };
 
         onMounted(() => {
             appEvent.value.addEventListener('clear', clearTarget);
 
-            watch(targetId, (newVal) => {
-                if (!newVal) {
-                    if (chart) {
-                        chart.destroy();
-                        chart = undefined!;
-                    }
-                } else {
-                    setTimeout(() => {
-                        syncChart();
-                    }, 100);
-                }
-            });
+            // 使用 flush: 'post' 確保在 DOM 更新完成後才觸發，避免 initial render 時 ref 尚未綁定
+            watch([targetId, pcEntities], () => {
+                syncChart();
+            }, { immediate: true, flush: 'post' });
         })
 
         const allApplyDamage = computed(() =>
@@ -445,7 +481,7 @@ export default defineComponent({
             return entity.name;
         }
 
-        const getChartSeriesData = (entity: EntityExtended[]): SeriesAreaOptions[] => {
+        const getChartSeriesData = (entity: EntityExtended[]): any[] => {
             const start = combatTimeRange.value.start;
             const end = combatTimeRange.value.end;
             const duration = Math.ceil(end - start);
@@ -466,7 +502,7 @@ export default defineComponent({
             });
 
             // Calculate 5-second moving average for each second from 0 to duration
-            const series = playerBins.map((p): SeriesAreaOptions & { data: [number, number][] } => {
+            const series = playerBins.map((p): any => {
                 const data: [number, number][] = [[0, 0]]; // Start with [0, 0] at relative time 0
 
                 for (let t = 1; t <= duration; t++) {
@@ -480,10 +516,9 @@ export default defineComponent({
                 }
 
                 return {
-                    type: 'area',
+                    type: 'line',
                     name: p.name,
                     data,
-                    stacking: 'normal',
                 };
             });
 
@@ -516,6 +551,7 @@ export default defineComponent({
             getMabiNameColor,
             prettyEntityName,
             currentTargetDuration,
+            isChartLoading,
             syncChart,
         }
     }
@@ -540,6 +576,12 @@ const chartOpt: Options = {
     title: { text: '' },
     chart: {
         zooming: { type: 'x' },
+        animation: false, // 關閉圖表整體載入動畫以提升效能
+    },
+    plotOptions: {
+        series: {
+            animation: false, // 關閉數據線條/面積動畫，避免大數據時背景渲染卡頓
+        },
     },
     xAxis: { 
         type: 'datetime',
