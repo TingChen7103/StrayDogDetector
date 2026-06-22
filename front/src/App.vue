@@ -1,12 +1,16 @@
 <template>
     <v-sheet width="100vw" class="d-flex flex-wrap pl-1 pr-1">
-        <v-sheet width="100svw" class="d-flex align-center"> <span style="text-wrap-mode: nowrap;">dilmatulgi, api
+        <v-sheet width="100svw" class="d-flex align-center">
+            <span style="text-wrap-mode: nowrap;">dilmatulgi, api
                 <span v-if="socketConnected"><v-icon icon="mdi-check" color="success" />connected</span>
                 <span v-else><v-icon icon="mdi-close" color="error" />disconnected</span>
             </span>
-            <span>
-
+            <v-divider class="mx-2" vertical />
+            <span style="text-wrap-mode: nowrap;">Mabinogi
+                <span v-if="mabiConnected" class="text-success"><v-icon icon="mdi-check" color="success" />connected</span>
+                <span v-else class="text-error"><v-icon icon="mdi-close" color="error" />disconnected</span>
             </span>
+            <v-btn @click="connectMabi" :loading="isConnectingMabi" color="primary" size="x-small" variant="outlined" class="ml-2">Connect</v-btn>
             <v-divider class="mx-2" vertical /> <v-select
                 v-model="lang"
                 :items="langList"
@@ -102,6 +106,44 @@ export default defineComponent({
         socket.onConnect = isConnected => socketConnected.value = isConnected;
         socket.onEvent = (event) => {
             // Discard incoming WS events to prevent automatic live updates
+        };
+
+        const mabiConnected = ref(false);
+        const isConnectingMabi = ref(false);
+
+        const checkMabiStatus = async () => {
+            try {
+                const res = await fetch('/api/mabinogi/status');
+                if (res.ok) {
+                    const data = await res.json();
+                    mabiConnected.value = data.connected;
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        };
+
+        const connectMabi = async () => {
+            isConnectingMabi.value = true;
+            try {
+                const res = await fetch('/api/mabinogi/connect', { method: 'POST' });
+                if (res.ok) {
+                    const data = await res.json();
+                    mabiConnected.value = data.connected;
+                    if (data.connected) {
+                        alert("瑪奇連線成功！");
+                    } else {
+                        alert("未偵測到瑪奇軟體，請確認遊戲已開啟並開始活動。");
+                    }
+                } else {
+                    alert("連線請求失敗");
+                }
+            } catch (e) {
+                console.error(e);
+                alert("連線時發生錯誤: " + e);
+            } finally {
+                isConnectingMabi.value = false;
+            }
         };
 
         const loadJsonData = (jsonStr: string) => {
@@ -286,6 +328,9 @@ export default defineComponent({
             await loadFromServer();
 
             socket.connect();
+
+            await checkMabiStatus();
+            setInterval(checkMabiStatus, 5000);
         });
 
         return {
@@ -301,6 +346,9 @@ export default defineComponent({
             loadFromServer,
 
             tab,
+            mabiConnected,
+            isConnectingMabi,
+            connectMabi,
         }
     }
 });

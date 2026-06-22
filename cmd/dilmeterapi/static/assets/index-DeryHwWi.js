@@ -25479,11 +25479,11 @@ const _hoisted_2$1 = {
 };
 const _hoisted_3$1 = { class: "d-flex ma-2 ga-2 align-center flex-wrap" };
 const _hoisted_4$1 = /* @__PURE__ */ createBaseVNode("span", null, "活躍DPS僅計算傷害大於0的時段。若相鄰兩次攻擊間隔小於或等於緩衝時間（B 秒），會合併計算為同一次活躍攻擊區間。活躍區間僅向後延伸緩衝時間，且不超過對該敵人的最後一次攻擊時間。單次獨立攻擊的最少活躍時間為 1 秒。", -1);
-const _hoisted_5 = {
+const _hoisted_5$1 = {
   key: 1,
   class: "ml-2 font-weight-bold text-subtitle-2 text-grey-darken-3"
 };
-const _hoisted_6 = { class: "text-primary" };
+const _hoisted_6$1 = { class: "text-primary" };
 const _hoisted_7 = { class: "font-weight-bold" };
 const _hoisted_8 = { class: "text-grey" };
 const _hoisted_9 = { class: "text-primary font-weight-bold" };
@@ -25613,9 +25613,9 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
         ]),
         _: 1
       }, 8, ["onClick"])) : createCommentVNode("", true),
-      _ctx.allApplyDamage > 0 ? (openBlock(), createElementBlock("span", _hoisted_5, [
+      _ctx.allApplyDamage > 0 ? (openBlock(), createElementBlock("span", _hoisted_5$1, [
         createTextVNode(" 攻略總時間: "),
-        createBaseVNode("span", _hoisted_6, toDisplayString(_ctx.currentTargetDuration), 1)
+        createBaseVNode("span", _hoisted_6$1, toDisplayString(_ctx.currentTargetDuration), 1)
       ])) : createCommentVNode("", true)
     ]),
     (openBlock(true), createElementBlock(Fragment, null, renderList(_ctx.pcEntities, (v) => {
@@ -25968,6 +25968,41 @@ const _sfc_main = /* @__PURE__ */ defineComponent$1({
     socket.onConnect = (isConnected) => socketConnected.value = isConnected;
     socket.onEvent = (event) => {
     };
+    const mabiConnected = ref(false);
+    const isConnectingMabi = ref(false);
+    const checkMabiStatus = async () => {
+      try {
+        const res = await fetch("/api/mabinogi/status");
+        if (res.ok) {
+          const data = await res.json();
+          mabiConnected.value = data.connected;
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    };
+    const connectMabi = async () => {
+      isConnectingMabi.value = true;
+      try {
+        const res = await fetch("/api/mabinogi/connect", { method: "POST" });
+        if (res.ok) {
+          const data = await res.json();
+          mabiConnected.value = data.connected;
+          if (data.connected) {
+            alert("瑪奇連線成功！");
+          } else {
+            alert("未偵測到瑪奇軟體，請確認遊戲已開啟並開始活動。");
+          }
+        } else {
+          alert("連線請求失敗");
+        }
+      } catch (e) {
+        console.error(e);
+        alert("連線時發生錯誤: " + e);
+      } finally {
+        isConnectingMabi.value = false;
+      }
+    };
     const loadJsonData = (jsonStr) => {
       let lastPos = 0;
       let count = 0;
@@ -26106,6 +26141,8 @@ const _sfc_main = /* @__PURE__ */ defineComponent$1({
       await reloadDbData();
       await loadFromServer();
       socket.connect();
+      await checkMabiStatus();
+      setInterval(checkMabiStatus, 5e3);
     });
     return {
       isLoading: isLoading2,
@@ -26118,7 +26155,10 @@ const _sfc_main = /* @__PURE__ */ defineComponent$1({
       download,
       loadFromFile,
       loadFromServer,
-      tab
+      tab,
+      mabiConnected,
+      isConnectingMabi,
+      connectMabi
     };
   }
 });
@@ -26806,7 +26846,15 @@ const VTabs = genericComponent()({
 const _hoisted_1 = { style: { "text-wrap-mode": "nowrap" } };
 const _hoisted_2 = { key: 0 };
 const _hoisted_3 = { key: 1 };
-const _hoisted_4 = /* @__PURE__ */ createBaseVNode("span", null, null, -1);
+const _hoisted_4 = { style: { "text-wrap-mode": "nowrap" } };
+const _hoisted_5 = {
+  key: 0,
+  class: "text-success"
+};
+const _hoisted_6 = {
+  key: 1,
+  class: "text-error"
+};
 function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
   const _component_take_damage = resolveComponent("take-damage");
   const _component_apply_damage_by_entity = resolveComponent("apply-damage-by-entity");
@@ -26839,7 +26887,39 @@ function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
                 createTextVNode("disconnected")
               ]))
             ]),
-            _hoisted_4,
+            createVNode(VDivider, {
+              class: "mx-2",
+              vertical: ""
+            }),
+            createBaseVNode("span", _hoisted_4, [
+              createTextVNode("Mabinogi "),
+              _ctx.mabiConnected ? (openBlock(), createElementBlock("span", _hoisted_5, [
+                createVNode(VIcon, {
+                  icon: "mdi-check",
+                  color: "success"
+                }),
+                createTextVNode("connected")
+              ])) : (openBlock(), createElementBlock("span", _hoisted_6, [
+                createVNode(VIcon, {
+                  icon: "mdi-close",
+                  color: "error"
+                }),
+                createTextVNode("disconnected")
+              ]))
+            ]),
+            createVNode(VBtn, {
+              onClick: _ctx.connectMabi,
+              loading: _ctx.isConnectingMabi,
+              color: "primary",
+              size: "x-small",
+              variant: "outlined",
+              class: "ml-2"
+            }, {
+              default: withCtx(() => [
+                createTextVNode("Connect")
+              ]),
+              _: 1
+            }, 8, ["onClick", "loading"]),
             createVNode(VDivider, {
               class: "mx-2",
               vertical: ""
@@ -37393,4 +37473,4 @@ app.config.errorHandler = (err) => {
   console.error(err);
 };
 app.use(vuetify).mount("#app");
-//# sourceMappingURL=index-B_fR68ad.js.map
+//# sourceMappingURL=index-DeryHwWi.js.map

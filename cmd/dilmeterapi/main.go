@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gopacket/gopacket/pcap"
@@ -32,6 +33,91 @@ var staticFiles embed.FS
 
 var logger = log.New(os.Stdout, "dilmeterapi ", log.LstdFlags|log.Lshortfile)
 var packetLogFilename = ""
+
+var (
+	mabinogiConnected  = false
+	activePub          *eventPublisher
+	activeCancel       context.CancelFunc
+	activeCtx          context.Context
+	activeCaptureMutex sync.Mutex
+
+	wsClients      = make(map[chan<- iEvent]context.Context)
+	wsClientsMutex sync.Mutex
+)
+
+func registerWsClient(ctx context.Context, ch chan<- iEvent) {
+	wsClientsMutex.Lock()
+	defer wsClientsMutex.Unlock()
+	wsClients[ch] = ctx
+
+	activeCaptureMutex.Lock()
+	pub := activePub
+	activeCaptureMutex.Unlock()
+	if pub != nil {
+		go pub.addClient(ctx, ch)
+	}
+}
+
+func unregisterWsClient(ch chan<- iEvent) {
+	wsClientsMutex.Lock()
+	defer wsClientsMutex.Unlock()
+	delete(wsClients, ch)
+}
+
+func startCapture(parentCtx context.Context, nicName string, fileName string) error {
+	activeCaptureMutex.Lock()
+	defer activeCaptureMutex.Unlock()
+
+	if mabinogiConnected && activePub != nil {
+		return nil
+	}
+
+	if activeCancel != nil {
+		activeCancel()
+	}
+
+	ctx, cancel := context.WithCancel(parentCtx)
+	activeCtx = ctx
+	activeCancel = cancel
+
+	r, err := packet.NewGameServerPacketReader(&packet.GameServerPacketReaderOpt{
+		Ctx:      ctx,
+		NicName:  nicName,
+		FileName: fileName,
+	})
+	if err != nil {
+		cancel()
+		activeCancel = nil
+		mabinogiConnected = false
+		activePub = nil
+		return err
+	}
+
+	pub := newEventPublisher(ctx, r)
+	activePub = pub
+	mabinogiConnected = true
+
+	// packet writer (for debug)
+	go func() {
+		ch := make(chan iEvent, 10000)
+		defer close(ch)
+
+		pub.addClient(ctx, ch)
+		if err := startPacketWriter(ctx, ch); err != nil {
+			logger.Println("startPacketWriter failed:", err)
+			return
+		}
+	}()
+
+	// Register all existing WebSocket clients to the new publisher
+	wsClientsMutex.Lock()
+	for clientCh, clientCtx := range wsClients {
+		go pub.addClient(clientCtx, clientCh)
+	}
+	wsClientsMutex.Unlock()
+
+	return nil
+}
 
 func main() {
 	// main ctx
@@ -77,7 +163,13 @@ func main() {
 			fileName = os.Args[2]
 		}
 
-		run(ctx, "", fileName)
+		if fileName != "" {
+			err := startCapture(ctx, "", fileName)
+			if err != nil {
+				logger.Println("Initial file startCapture failed:", err)
+			}
+		}
+		run(ctx, "", "")
 
 	case "":
 		logger.Println("Check cached NIC...")
@@ -111,7 +203,13 @@ func main() {
 		}
 		// --- 修改處 END ---
 
-		run(ctx, nicName, "")
+		if nicName != "" {
+			err := startCapture(ctx, nicName, "")
+			if err != nil {
+				logger.Println("Initial startCapture failed:", err)
+			}
+		}
+		run(ctx, "", "")
 
 	default:
 		_, err := os.Stat(mode)
@@ -125,7 +223,13 @@ func main() {
 			nicName = mode
 		}
 
-		run(ctx, nicName, fileName)
+		if nicName != "" || fileName != "" {
+			err := startCapture(ctx, nicName, fileName)
+			if err != nil {
+				logger.Println("Initial startCapture failed:", err)
+			}
+		}
+		run(ctx, "", "")
 	}
 
 	for {
@@ -134,35 +238,7 @@ func main() {
 }
 
 func run(ctx context.Context, nicName string, fileName string) {
-	var pub *eventPublisher
-
-	if nicName != "" || fileName != "" {
-		r, err := packet.NewGameServerPacketReader(&packet.GameServerPacketReaderOpt{
-			Ctx:      ctx,
-			NicName:  nicName,
-			FileName: fileName,
-		})
-		if err != nil {
-			messagebox(fmt.Sprintf("NewGameServerPacketReader failed: %v", err))
-			logger.Fatalln("NewGameServerPacketReader failed:", err)
-		}
-
-		pub = newEventPublisher(ctx, r)
-
-		// packet writer (for debug)
-		go func() {
-			ch := make(chan iEvent, 10000)
-			defer close(ch)
-
-			pub.addClient(ctx, ch)
-			if err := startPacketWriter(ctx, ch); err != nil {
-				logger.Println("startPacketWriter failed:", err)
-				return
-			}
-		}()
-	} else {
-		logger.Println("No active NIC or file specified. Running in viewer-only mode.")
-	}
+	logger.Println("Starting Web/WS server and opening browser...")
 
 	startWebsocketServer(func(ws *websocket.Conn) {
 		logger.Printf("Client connected from %s", ws.RemoteAddr())
@@ -173,9 +249,8 @@ func run(ctx context.Context, nicName string, fileName string) {
 		defer wsCtxCancel()
 		defer close(ch)
 
-		if pub != nil {
-			go pub.addClient(wsCtx, ch)
-		}
+		registerWsClient(wsCtx, ch)
+		defer unregisterWsClient(ch)
 
 		packetReceiveLoop := func() {
 			for {
@@ -229,6 +304,51 @@ func run(ctx context.Context, nicName string, fileName string) {
 	}
 }
 
+func httpHandlerMabinogiStatus(w http.ResponseWriter, r *http.Request) {
+	activeCaptureMutex.Lock()
+	connected := mabinogiConnected
+	activeCaptureMutex.Unlock()
+
+	w.Header().Add("Content-Type", "application/json")
+	w.Write([]byte(fmt.Sprintf(`{"connected": %t}`, connected)))
+}
+
+func httpHandlerMabinogiConnect(w http.ResponseWriter, r *http.Request) {
+	activeCaptureMutex.Lock()
+	connected := mabinogiConnected
+	activeCaptureMutex.Unlock()
+
+	if connected {
+		w.Header().Add("Content-Type", "application/json")
+		w.Write([]byte(`{"connected": true}`))
+		return
+	}
+
+	logger.Println("Manual connect requested. Scanning for active NIC...")
+	nicName, err := pcaputil.FindNic()
+	if err != nil {
+		logger.Println("Manual connect failed: no active NIC found.")
+		w.Header().Add("Content-Type", "application/json")
+		w.Write([]byte(`{"connected": false, "error": "not found"}`))
+		return
+	}
+
+	// Found active NIC! Start capture
+	err = startCapture(context.Background(), nicName, "")
+	if err != nil {
+		logger.Println("Manual startCapture failed:", err)
+		w.Header().Add("Content-Type", "application/json")
+		w.Write([]byte(fmt.Sprintf(`{"connected": false, "error": "%s"}`, err.Error())))
+		return
+	}
+
+	// Save NIC setting
+	saveNicSetting(nicName)
+
+	w.Header().Add("Content-Type", "application/json")
+	w.Write([]byte(`{"connected": true}`))
+}
+
 func startWebsocketServer(newClientCb func(*websocket.Conn)) {
 	remote, err := url.Parse("https://mabires.pril.cc")
 	if err != nil {
@@ -253,6 +373,8 @@ func startWebsocketServer(newClientCb func(*websocket.Conn)) {
 
 	http.Handle("/ws", websocket.Handler(newClientCb))
 	http.HandleFunc("/api/packet_log", httpHandlerPacketLog)
+	http.HandleFunc("/api/mabinogi/status", httpHandlerMabinogiStatus)
+	http.HandleFunc("/api/mabinogi/connect", httpHandlerMabinogiConnect)
 	http.HandleFunc("/res/", handler(proxy))
 
 	var staticFS = fs.FS(staticFiles)
