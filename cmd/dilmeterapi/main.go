@@ -102,11 +102,12 @@ func main() {
 			var err error
 			nicName, err = pcaputil.FindNic()
 			if err != nil {
-				messagebox(fmt.Sprintf("%v\nis mabinogi running?", err))
-				logger.Fatalln("FindNic failed:", err)
+				logger.Println("FindNic failed:", err, "- Running in viewer-only mode.")
+				nicName = ""
+			} else {
+				// 4. 掃描成功後，儲存到設定檔
+				saveNicSetting(nicName)
 			}
-			// 4. 掃描成功後，儲存到設定檔
-			saveNicSetting(nicName)
 		}
 		// --- 修改處 END ---
 
@@ -133,29 +134,35 @@ func main() {
 }
 
 func run(ctx context.Context, nicName string, fileName string) {
-	r, err := packet.NewGameServerPacketReader(&packet.GameServerPacketReaderOpt{
-		Ctx:      ctx,
-		NicName:  nicName,
-		FileName: fileName,
-	})
-	if err != nil {
-		messagebox(fmt.Sprintf("NewGameServerPacketReader failed: %v", err))
-		logger.Fatalln("NewGameServerPacketReader failed:", err)
-	}
+	var pub *eventPublisher
 
-	pub := newEventPublisher(ctx, r)
-
-	// packet writer (for debug)
-	go func() {
-		ch := make(chan iEvent, 10000)
-		defer close(ch)
-
-		pub.addClient(ctx, ch)
-		if err := startPacketWriter(ctx, ch); err != nil {
-			logger.Println("startPacketWriter failed:", err)
-			return
+	if nicName != "" || fileName != "" {
+		r, err := packet.NewGameServerPacketReader(&packet.GameServerPacketReaderOpt{
+			Ctx:      ctx,
+			NicName:  nicName,
+			FileName: fileName,
+		})
+		if err != nil {
+			messagebox(fmt.Sprintf("NewGameServerPacketReader failed: %v", err))
+			logger.Fatalln("NewGameServerPacketReader failed:", err)
 		}
-	}()
+
+		pub = newEventPublisher(ctx, r)
+
+		// packet writer (for debug)
+		go func() {
+			ch := make(chan iEvent, 10000)
+			defer close(ch)
+
+			pub.addClient(ctx, ch)
+			if err := startPacketWriter(ctx, ch); err != nil {
+				logger.Println("startPacketWriter failed:", err)
+				return
+			}
+		}()
+	} else {
+		logger.Println("No active NIC or file specified. Running in viewer-only mode.")
+	}
 
 	startWebsocketServer(func(ws *websocket.Conn) {
 		logger.Printf("Client connected from %s", ws.RemoteAddr())
@@ -166,7 +173,9 @@ func run(ctx context.Context, nicName string, fileName string) {
 		defer wsCtxCancel()
 		defer close(ch)
 
-		go pub.addClient(wsCtx, ch)
+		if pub != nil {
+			go pub.addClient(wsCtx, ch)
+		}
 
 		packetReceiveLoop := func() {
 			for {

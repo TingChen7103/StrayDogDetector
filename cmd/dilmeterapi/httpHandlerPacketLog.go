@@ -8,6 +8,12 @@ import (
 )
 
 func httpHandlerPacketLog(w http.ResponseWriter, r *http.Request) {
+	if packetLogFilename == "" {
+		w.Header().Add("Content-Type", "application/json")
+		w.Write([]byte("[]"))
+		return
+	}
+
 	fd, err := os.Open(packetLogFilename)
 	if err != nil {
 		http.Error(w, err.Error(), 404)
