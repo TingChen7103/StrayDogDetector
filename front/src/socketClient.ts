@@ -14,7 +14,12 @@ export class SocketClient {
             return;
         }
 
-        const s = this.socket = new WebSocket(this.url);
+        let targetUrl = this.url;
+        if (targetUrl.startsWith('/')) {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            targetUrl = `${protocol}//${window.location.host}${targetUrl}`;
+        }
+        const s = this.socket = new WebSocket(targetUrl);
 
         setTimeout(() => {
             if (s.readyState == WebSocket.CONNECTING) {

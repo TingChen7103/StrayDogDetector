@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -26,7 +27,7 @@ import (
 )
 
 const port = 8030
-const settingFileName = "setting.ini" // 定義設定檔名稱
+const settingFileName = "raccoon_setting.ini" // 定義設定檔名稱
 
 //go:embed static
 var staticFiles embed.FS
@@ -237,10 +238,32 @@ func main() {
 	}
 }
 
+func listenAvailablePort(preferredPort int) (net.Listener, int, error) {
+	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", preferredPort))
+	if err == nil {
+		return listener, preferredPort, nil
+	}
+
+	logger.Printf("Port %d is occupied or unavailable (%v). Trying dynamic port allocation...", preferredPort, err)
+	listener, err = net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, 0, err
+	}
+
+	actualPort := listener.Addr().(*net.TCPAddr).Port
+	return listener, actualPort, nil
+}
+
 func run(ctx context.Context, nicName string, fileName string) {
 	logger.Println("Starting Web/WS server and opening browser...")
 
-	startWebsocketServer(func(ws *websocket.Conn) {
+	listener, actualPort, err := listenAvailablePort(8030)
+	if err != nil {
+		messagebox(fmt.Sprintf("Failed to bind port: %v", err))
+		logger.Fatalln("Failed to bind port:", err)
+	}
+
+	startWebsocketServer(listener, func(ws *websocket.Conn) {
 		logger.Printf("Client connected from %s", ws.RemoteAddr())
 		wsCtx, wsCtxCancel := context.WithCancel(ws.Request().Context())
 
@@ -300,7 +323,7 @@ func run(ctx context.Context, nicName string, fileName string) {
 
 	if runtime.GOOS == "windows" {
 		// ignore error
-		go exec.Command("explorer", fmt.Sprintf("http://127.0.0.1:%v", port)).Run()
+		go exec.Command("explorer", fmt.Sprintf("http://127.0.0.1:%v", actualPort)).Run()
 	}
 }
 
@@ -349,7 +372,7 @@ func httpHandlerMabinogiConnect(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(`{"connected": true}`))
 }
 
-func startWebsocketServer(newClientCb func(*websocket.Conn)) {
+func startWebsocketServer(listener net.Listener, newClientCb func(*websocket.Conn)) {
 	remote, err := url.Parse("https://mabires.pril.cc")
 	if err != nil {
 		panic(err)
@@ -375,6 +398,7 @@ func startWebsocketServer(newClientCb func(*websocket.Conn)) {
 	http.HandleFunc("/api/packet_log", httpHandlerPacketLog)
 	http.HandleFunc("/api/mabinogi/status", httpHandlerMabinogiStatus)
 	http.HandleFunc("/api/mabinogi/connect", httpHandlerMabinogiConnect)
+	http.HandleFunc("/api/settings", httpHandlerSettings)
 	http.HandleFunc("/res/", handler(proxy))
 
 	var staticFS = fs.FS(staticFiles)
@@ -385,12 +409,13 @@ func startWebsocketServer(newClientCb func(*websocket.Conn)) {
 
 	http.Handle("/", http.FileServer(http.FS(htmlContent)))
 
-	logger.Printf("Server listening on port %d", port)
+	actualPort := listener.Addr().(*net.TCPAddr).Port
+	logger.Printf("Server listening on port %d (http://127.0.0.1:%d)", actualPort, actualPort)
 
 	go func() {
-		err := http.ListenAndServe(fmt.Sprintf("127.0.0.1:%d", port), nil)
+		err := http.Serve(listener, nil)
 		if err != nil {
-			messagebox(fmt.Sprintf("ListenAndServe failed: %v", err))
+			messagebox(fmt.Sprintf("Serve failed: %v", err))
 			logger.Fatalln(err)
 		}
 	}()
@@ -441,35 +466,98 @@ func startPacketWriter(ctx context.Context, ch <-chan iEvent) error {
 	}
 }
 
-// loadNicSetting 讀取 setting.ini 中的 NIC 設定
-func loadNicSetting() string {
+var settingsMutex sync.Mutex
+var settingsMap = map[string]string{
+	"NIC":             "",
+	"ActiveDpsBuffer": "10",
+	"ChartWindowSize": "5",
+}
+
+func loadSettings() {
+	settingsMutex.Lock()
+	defer settingsMutex.Unlock()
+
 	file, err := os.Open(settingFileName)
 	if err != nil {
-		return ""
+		return
 	}
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		if strings.HasPrefix(line, "NIC") {
-			parts := strings.SplitN(line, "=", 2)
-			if len(parts) == 2 {
-				return strings.TrimSpace(parts[1])
+		if line == "" || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) == 2 {
+			k := strings.TrimSpace(parts[0])
+			v := strings.TrimSpace(parts[1])
+			if k == "NIC" || k == "ActiveDpsBuffer" || k == "ChartWindowSize" {
+				settingsMap[k] = v
 			}
 		}
 	}
-	return ""
+}
+
+func saveSettings() {
+	settingsMutex.Lock()
+	defer settingsMutex.Unlock()
+
+	var sb strings.Builder
+	for k, v := range settingsMap {
+		sb.WriteString(fmt.Sprintf("%s = %s\n", k, v))
+	}
+	err := os.WriteFile(settingFileName, []byte(sb.String()), 0644)
+	if err != nil {
+		logger.Println("Failed to save settings to", settingFileName, ":", err)
+	}
+}
+
+// loadNicSetting 讀取 setting.ini 中的 NIC 設定
+func loadNicSetting() string {
+	loadSettings()
+	settingsMutex.Lock()
+	defer settingsMutex.Unlock()
+	return settingsMap["NIC"]
 }
 
 // saveNicSetting 將 NIC 名稱寫入 setting.ini
 func saveNicSetting(nicName string) {
-	content := fmt.Sprintf("NIC = %s", nicName)
-	err := os.WriteFile(settingFileName, []byte(content), 0644)
-	if err != nil {
-		logger.Println("Failed to save setting.ini:", err)
+	settingsMutex.Lock()
+	settingsMap["NIC"] = nicName
+	settingsMutex.Unlock()
+	saveSettings()
+}
+
+func httpHandlerSettings(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		settingsMutex.Lock()
+		defer settingsMutex.Unlock()
+
+		w.Header().Add("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(settingsMap)
+	} else if r.Method == http.MethodPost {
+		var req map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		settingsMutex.Lock()
+		for k, v := range req {
+			if k == "NIC" || k == "ActiveDpsBuffer" || k == "ChartWindowSize" {
+				settingsMap[k] = v
+			}
+		}
+		settingsMutex.Unlock()
+
+		saveSettings()
+
+		w.Header().Add("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success"}`))
 	} else {
-		logger.Println("Saved NIC to setting.ini:", nicName)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 

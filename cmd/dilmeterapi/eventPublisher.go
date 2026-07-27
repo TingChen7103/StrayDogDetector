@@ -89,8 +89,8 @@ func (t *eventPublisher) loop() {
 					continue
 				}
 
-				if len(entity.Name) <= 0 || entity.Name[0] == '_' {
-					// ignore npc
+				if entity == nil || len(entity.Name) <= 0 || entity.Name[0] == '_' {
+					// ignore npc or nil
 					continue
 				}
 

@@ -408,17 +408,33 @@ export class DualGroupedDamageCollector extends GroupedDamageCollector {
         for (const k in this._grouped2Damages) {
             delete this._grouped2Damages[k];
         }
-
         for (const k in this._grouped2TotalDamages) {
             delete this._grouped2TotalDamages[k];
+        }
+        for (const k in this._grouped2MinDamages) {
+            delete this._grouped2MinDamages[k];
+        }
+        for (const k in this._grouped2MaxDamages) {
+            delete this._grouped2MaxDamages[k];
+        }
+        for (const k in this._grouped2Count) {
+            delete this._grouped2Count[k];
         }
 
         for (const k in this._dualGroupedDamages) {
             delete this._dualGroupedDamages[k];
         }
-
         for (const k in this._dualGroupedTotalDamages) {
             delete this._dualGroupedTotalDamages[k];
+        }
+        for (const k in this._dualGroupedMinDamages) {
+            delete this._dualGroupedMinDamages[k];
+        }
+        for (const k in this._dualGroupedMaxDamages) {
+            delete this._dualGroupedMaxDamages[k];
+        }
+        for (const k in this._dualGroupedCount) {
+            delete this._dualGroupedCount[k];
         }
     }
 }

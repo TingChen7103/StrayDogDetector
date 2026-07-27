@@ -71,13 +71,14 @@
                             <v-sheet width="100%"
                                 @click.stop="showEntityDetailDamageList(v.actor.id, targetId, +skillId)">
                                 <div>
-                                    {{ skillNameMap[+skillId] || `unknownSkill:${skillId}` }}
-                                    damage: {{ damageBySkill.toFixed(0) }}
-                                    count: {{ v.groupedCount[+skillId] }}
-                                    avgDamage: {{ (v.groupedCount[+skillId] ? damageBySkill / v.groupedCount[+skillId] : 0).toFixed(0) }}
-                                    minDamage: {{ v.groupedMinDamages[+skillId]?.toFixed(0) || '0' }}
-                                    maxDamage: {{ v.groupedMaxDamages[+skillId]?.toFixed(0) || '0' }}
-                                    {{ (100 * damageBySkill / v.totalDamage).toFixed(1) }}%
+                                    <span class="font-weight-bold">{{ formatSkillName(+skillId) }}</span>
+                                    <span class="ml-2 text-grey-darken-1">damage:</span> <span class="font-weight-bold">{{ damageBySkill.toFixed(0) }}</span>
+                                    <span class="ml-2 text-grey-darken-1">count:</span> <span class="font-weight-bold">{{ v.groupedCount[+skillId] }}</span>
+                                    <span class="ml-2 text-orange-darken-2">avgDamage: {{ (v.groupedCount[+skillId] ? damageBySkill / v.groupedCount[+skillId] : 0).toFixed(0) }}</span>
+                                    <span class="ml-2 text-grey-darken-1">minDamage: {{ v.groupedMinDamages[+skillId]?.toFixed(0) || '0' }}</span>
+                                    <span class="ml-2 text-blue-darken-1">maxDamage: {{ v.groupedMaxDamages[+skillId]?.toFixed(0) || '0' }}</span>
+                                    <span class="ml-2 text-grey-darken-1">傷害佔比:</span> <span class="font-weight-bold">{{ (100 * damageBySkill / v.totalDamage).toFixed(1) }}%</span>
+                                    <span class="ml-2 text-error font-weight-bold" v-if="!isExcludedSkill(+skillId)">暴擊率: {{ calculateSkillCriticalRate(v.groupedDamages[+skillId]) }}</span>
                                 </div>
                                 <div v-if="(showBuffCoverage || showDebuffCoverage) && getSkillConditionCoverage(v.groupedDamages[skillId], showBuffCoverage, showDebuffCoverage).length > 0" 
                                     class="d-flex flex-wrap align-center mt-1" style="gap: 8px;">
@@ -92,7 +93,7 @@
                             <!-- 막대 -->
                             <v-sheet width="100%" height="16">
                                 <v-sheet @click.stop="showEntityDetailDamageList(v.actor.id, '', +skillId)"
-                                    :color="getMabiNameColor(skillNameMap[+skillId] || `unknownSkill:${skillId}`)"
+                                    :color="getMabiNameColor(formatSkillName(+skillId))"
                                     height="100%"
                                     :width="`${Math.round(100 * damageBySkill / v.totalDamage).toFixed(0)}%`"
                                     class="rounded-xl">
@@ -153,10 +154,75 @@ export default defineComponent({
         const chartDom = ref<HTMLElement>(undefined!);
         let chart: Highcharts.Chart = undefined!;
 
+        const targetId = ref('');
+        const activeDpsBuffer = ref(10);
+        const chartWindowSize = ref(5);
+
         // chartData computed ref removed as we do on-demand chart sync
 
+        const isExcludedSkill = (skillId: number): boolean => {
+            const excludedSkills = [58100, 58101, 58102, 50434, 58103, 58104, 58009];
+            return excludedSkills.includes(skillId);
+        };
+
+        const calculateSkillCriticalRate = (damages: EntityDamage[] | undefined): string => {
+            if (!damages || damages.length === 0) {
+                return '0.00%';
+            }
+            const criticalHits = damages.filter(d => d.IsCritical).length;
+            const totalHits = damages.length;
+            const rate = (criticalHits / totalHits) * 100;
+            return `${rate.toFixed(2)}%`;
+        };
+
+        let isSettingsLoaded = false;
+        const loadSettings = async () => {
+            try {
+                const res = await fetch('/api/settings');
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.ActiveDpsBuffer) {
+                        activeDpsBuffer.value = parseInt(data.ActiveDpsBuffer, 10) || 10;
+                    }
+                    if (data.ChartWindowSize) {
+                        chartWindowSize.value = parseInt(data.ChartWindowSize, 10) || 5;
+                    }
+                }
+            } catch (e) {
+                console.error("Failed to load settings:", e);
+            } finally {
+                isSettingsLoaded = true;
+            }
+        };
+
+        watch([activeDpsBuffer, chartWindowSize], async ([newBuffer, newWindowSize]) => {
+            if (!isSettingsLoaded) return;
+            try {
+                await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        ActiveDpsBuffer: String(newBuffer),
+                        ChartWindowSize: String(newWindowSize)
+                    })
+                });
+            } catch (e) {
+                console.error("Failed to save settings:", e);
+            }
+        });
+
+        const handleClear = () => {
+            clearTarget();
+            for (const k in damageCollectorMap) {
+                if (k === 'target') continue;
+                const v = damageCollectorMap[k];
+                dcManager.value.removeDamageCollector(v);
+                delete damageCollectorMap[k];
+            }
+        };
+
         onUnmounted(() => {
-            appEvent.value.removeEventListener('clear', clearTarget);
+            appEvent.value.removeEventListener('clear', handleClear);
 
             for (const v of Object.values(damageCollectorMap)) {
                 dcManager.value.removeDamageCollector(v);
@@ -201,7 +267,7 @@ export default defineComponent({
             detailDialog.value = true;
             detailDialogData.value = {
                 attackerName: prettyEntityName(entity.actor)!,
-                skillName: skillNameMap.value[skillId] || `unknownSkill:${skillId}`,
+                skillName: formatSkillName(skillId),
                 damages: damages,
             };
         }
@@ -292,10 +358,6 @@ export default defineComponent({
             }
             return formatDuration(end - start);
         });
-
-        const targetId = ref('');
-        const activeDpsBuffer = ref(10);
-        const chartWindowSize = ref(5);
 
         const calculateActiveDps = (damages: EntityDamage[], buffer: number): number => {
             const validDamages = damages.filter(d => d.Damage > 0);
@@ -470,7 +532,8 @@ export default defineComponent({
         };
 
         onMounted(() => {
-            appEvent.value.addEventListener('clear', clearTarget);
+            appEvent.value.addEventListener('clear', handleClear);
+            loadSettings();
 
             // 使用 flush: 'post' 確保在 DOM 更新完成後才觸發，避免 initial render 時 ref 尚未綁定
             watch([targetId, pcEntities, chartWindowSize], () => {
@@ -506,6 +569,10 @@ export default defineComponent({
             // for pet
             return entity.name;
         }
+
+        const formatSkillName = (skillId: number) => {
+            return skillNameMap.value[+skillId] || `unknownSkill:${skillId}`;
+        };
 
         const getChartSeriesData = (entity: EntityExtended[], windowSize: number): any[] => {
             const start = combatTimeRange.value.start;
@@ -580,6 +647,9 @@ export default defineComponent({
             currentTargetDuration,
             isChartLoading,
             syncChart,
+            formatSkillName,
+            isExcludedSkill,
+            calculateSkillCriticalRate,
         }
     }
 });

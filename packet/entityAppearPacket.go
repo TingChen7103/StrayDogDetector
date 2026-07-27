@@ -63,8 +63,9 @@ func ParseEntityAppearPacket(msg Message) (*EntityInfo, error) {
 		return nil, err
 	}
 
-	if msg[1].Data().(uint8) != 5 {
-		// public 데이터만 읽음
+	appearType := msg[1].Data().(uint8)
+	if appearType != 5 && appearType != 4 && appearType != 3 {
+		// public (5), self (4), pet/marionette (3) character data만 읽음
 		return nil, nil
 	}
 

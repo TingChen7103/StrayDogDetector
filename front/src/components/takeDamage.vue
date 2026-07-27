@@ -92,7 +92,7 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, inject, ref, computed, onUnmounted } from "vue";
+import { defineComponent, inject, ref, computed, onUnmounted, onMounted } from "vue";
 
 import { getMabiNameColor } from '@/util';
 import { EntityDamage, EntityCondition, ActorManager, BaseActor, GroupActor, EntityActor } from '@/eventActor';
@@ -112,10 +112,25 @@ export default defineComponent({
         const condNameMap = inject('condNameMap');
         const actorManager = inject('actorManager');
         const dcManager = inject('dcManager');
+        const appEvent = inject('appEvent') as any;
 
         const damageCollectorMap: Record<string, GroupedDamageCollector> = {};
 
+        const handleClear = () => {
+            for (const v of Object.values(damageCollectorMap)) {
+                dcManager.value.removeDamageCollector(v);
+            }
+            for (const k in damageCollectorMap) {
+                delete damageCollectorMap[k];
+            }
+        };
+
+        onMounted(() => {
+            appEvent.value.addEventListener('clear', handleClear);
+        });
+
         onUnmounted(() => {
+            appEvent.value.removeEventListener('clear', handleClear);
             for (const v of Object.values(damageCollectorMap)) {
                 dcManager.value.removeDamageCollector(v);
             }

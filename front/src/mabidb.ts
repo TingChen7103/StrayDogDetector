@@ -303,12 +303,12 @@ export class MabiDB {
         }
 
         const langStr = this.cachedLangString[key];
-        if (langStr) {
+        if (langStr && !langStr.startsWith('not found key,')) {
             return langStr;
         }
 
         const regionStr = this.cachedRegionString[key];
-        if (regionStr) {
+        if (regionStr && !regionStr.startsWith('not found key,')) {
             return regionStr;
         }
 

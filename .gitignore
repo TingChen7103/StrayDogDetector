@@ -6,3 +6,5 @@ dist
 *.pcapng
 *.ndjson
 setting.ini
+raccoon_setting.ini
+

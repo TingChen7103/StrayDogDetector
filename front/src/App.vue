@@ -26,7 +26,7 @@
                     <v-btn @click="loadFromFile" v-bind="props" :loading="isLoading" color="primary" size="small"
                         prepend-icon="mdi-upload" class="ml-1">Load</v-btn>
                 </template>
-                파일에서 데이터를 로드합니다
+                從本機檔案載入數據分析
             </v-tooltip>
             <v-btn @click="download" :loading="isLoading" color="primary" size="small" prepend-icon="mdi-download"
                 class="ml-1">Download</v-btn>
@@ -35,28 +35,18 @@
                     <v-btn @click="loadFromServer" v-bind="props" :loading="isLoading" color="primary" size="small"
                         prepend-icon="mdi-refresh" class="ml-1">Reload</v-btn>
                 </template>
-                서버에서 데이터를 다시 로드합니다
+                重新載入伺服器數據
             </v-tooltip>
             <v-btn @click="clearData" :loading="isLoading" color="primary" size="small" prepend-icon="mdi-close"
                 class="ml-1 mr-4">Clear</v-btn></v-sheet>
     </v-sheet>
 
     <v-tabs v-model="tab">
-        <v-tab value="takeDamage">Take Damage</v-tab>
-        <v-tab value="applyDamageByEntity">Apply Damage (By Entity)</v-tab>
         <v-tab value="applyDamageBySkill">Apply Damage (By Skill)</v-tab>
         <v-tab value="entityList">Characters</v-tab>
     </v-tabs>
 
     <v-tabs-window v-model="tab">
-        <v-tabs-window-item value="takeDamage">
-            <take-damage />
-        </v-tabs-window-item>
-
-        <v-tabs-window-item value="applyDamageByEntity">
-            <apply-damage-by-entity />
-        </v-tabs-window-item>
-
         <v-tabs-window-item value="applyDamageBySkill">
             <apply-damage-by-skill />
         </v-tabs-window-item>
@@ -263,16 +253,40 @@ export default defineComponent({
             }
         }
 
-        const tab = ref('');
+        const tab = ref('applyDamageBySkill');
+
+        const localOverrides: Record<string, string> = {
+            'race.13571': '雷楠的米勒：悔恨',
+            'race.13570': '雷楠的米勒',
+        };
 
         const safeGetLang = (nameKey: string) => {
             try {
+                if (localOverrides[nameKey]) {
+                    return localOverrides[nameKey];
+                }
                 if (!db.value) return nameKey;
                 const str = db.value.getCurLangString(nameKey);
                 return str ? str : nameKey;
             } catch (e) {
                 return nameKey;
             }
+        };
+
+        const localSkillOverrides: Record<number, string> = {
+            54201: '1. 幕後操作',
+            54202: '2. 幕前傀儡',
+            54151: '3. 第一幕 : 偶然的衝突',
+            54152: '4. 第二幕 : 激增的憤怒',
+            54153: '5. 第四幕 : 嫉妒的化身',
+            54154: '6. 第六幕 : 誘惑的圈套',
+            54155: '7. 第七幕 : 狂亂的奔走',
+            59167: '8. 重拍強音',
+            59168: '9. 律動步伐',
+            59169: '10. 壯麗終曲',
+            59164: '11. 弦音編織',
+            59165: '12. 間奏斬擊',
+            52503: '荊棘之光',
         };
 
         const reloadDbData = async () => {
@@ -284,32 +298,52 @@ export default defineComponent({
             
             console.log(`[App] Reloading Data... Region: ${region.value}, Lang: ${lang.value}`);
 
+            const hasLangDiff = region.value !== lang.value;
+
             // 讀取 Race
             {
-                const list = await db.value.getSortedListData('RaceList');
+                const list = await db.value.getSortedListData('RaceList', region.value);
+                const langList = hasLangDiff ? await db.value.getSortedListData('RaceList', lang.value) : [];
+                const langMap = new Map(langList.map(v => [v.Id, v.Name]));
                 for (const v of list) {
-                    raceNameMap.value[v.Id] = `${safeGetLang(v.Name)} ${v.Id}`;
+                    const nameKey = langMap.get(v.Id) || v.Name;
+                    raceNameMap.value[v.Id] = `${safeGetLang(nameKey)} ${v.Id}`;
                 }
             }
             // 讀取 Skill (最容易爆的地方)
             {
-                const list = await db.value.getSortedListData('SkillList');
+                const list = await db.value.getSortedListData('SkillList', region.value);
+                const langList = hasLangDiff ? await db.value.getSortedListData('SkillList', lang.value) : [];
+                const langMap = new Map(langList.map(v => [v.Id, v.Name]));
                 for (const v of list) {
-                    skillNameMap.value[v.Id] = safeGetLang(v.Name) || `Skill_${v.Id}`;
+                    const nameKey = langMap.get(v.Id) || v.Name;
+                    skillNameMap.value[v.Id] = safeGetLang(nameKey) || `Skill_${v.Id}`;
+                }
+                for (const [sidStr, sname] of Object.entries(localSkillOverrides)) {
+                    const sid = +sidStr;
+                    if (!skillNameMap.value[sid] || skillNameMap.value[sid].startsWith('Skill_') || skillNameMap.value[sid].startsWith('skill.')) {
+                        skillNameMap.value[sid] = sname;
+                    }
                 }
             }
             // 讀取 Conditions
             {
-                const list = await db.value.getSortedListData('CharCondList');
+                const list = await db.value.getSortedListData('CharCondList', region.value);
+                const langList = hasLangDiff ? await db.value.getSortedListData('CharCondList', lang.value) : [];
+                const langMap = new Map(langList.map(v => [v.Id, v.Name]));
                 for (const v of list) {
-                    condNameMap.value[v.Id] = `${safeGetLang(v.Name)} ${v.Id}`;
+                    const nameKey = langMap.get(v.Id) || v.Name;
+                    condNameMap.value[v.Id] = `${safeGetLang(nameKey)} ${v.Id}`;
                 }
             }
             // 讀取 Items
             {
-                const list = await db.value.getSortedListData('ItemList');
+                const list = await db.value.getSortedListData('ItemList', region.value);
+                const langList = hasLangDiff ? await db.value.getSortedListData('ItemList', lang.value) : [];
+                const langMap = new Map(langList.map(v => [v.Id, v.Name]));
                 for (const v of list) {
-                    itemNameMap.value[v.Id] = `${safeGetLang(v.Name)} ${v.Id}`;
+                    const nameKey = langMap.get(v.Id) || v.Name;
+                    itemNameMap.value[v.Id] = `${safeGetLang(nameKey)} ${v.Id}`;
                 }
             }
         };

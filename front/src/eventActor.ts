@@ -16,6 +16,8 @@ export class ActorManager {
     public damages: protocols.eventDamage[] = [];
 
     public static pcRaceSet = new Set<number>([8001, 8002, 9001, 9002, 10001, 10002]);
+    public static marionetteRaceSet = new Set<number>([990125, 990204, 990213]);
+    public static marionetteSkillSet = new Set<number>([54151, 54152, 54153, 54154, 54155, 59167, 59168, 59169]);
 
     public onEvent(event: protocols.eventBase) {
         if (event.EventId === protocols.eventIdEntityAppear) {
@@ -35,19 +37,32 @@ export class ActorManager {
                     const event_ = event as protocols.eventDamage;
                     this.damages.push(event_);
 
-                    if (entity) {
-                        entity.onApplyDamage(event_);
-                        entity.group.onApplyDamage(event_);
+                    let attackerEntity = this.entityMap[event_.Id];
+                    if (!attackerEntity) {
+                        this.onEntityAppear({
+                            Id: event_.Id,
+                            EventId: 1,
+                            At: event_.At,
+                            Name: `unknown:${event_.Id}`,
+                            RaceId: 10001,
+                            Height: 1,
+                            Weight: 1,
+                            Upper: 1,
+                            Lower: 1,
+                            GuildName: "",
+                            OwnerId: "",
+                        });
+                        attackerEntity = this.entityMap[event_.Id];
                     }
 
-                    const targetEntity = this.entityMap[event_.TargetId];
+                    let targetEntity = this.entityMap[event_.TargetId];
                     if (!targetEntity) {
                         // 유저 정보가 오기전에 대미지가 먼저오는 경우
                         // @TODO: 추후에 local storage를 사용해 캐싱하는 식으로 변경
                         this.onEntityAppear({
                             Id: event_.TargetId,
                             EventId: 1,
-                            At: Date.now() / 1000,
+                            At: event_.At,
                             Name: `unknown:${event_.TargetId}`,
                             RaceId: 10001,
                             Height: 1,
@@ -56,11 +71,41 @@ export class ActorManager {
                             Lower: 1,
                             GuildName: "",
                             OwnerId: "",
-                        })
+                        });
+                        targetEntity = this.entityMap[event_.TargetId];
                     }
 
-                    targetEntity.onTakeDamage(event_);
-                    targetEntity.group.onTakeDamage(event_);
+                    let effectiveAttacker = attackerEntity;
+
+                    // 白名單校驗：僅允許玩家本人，以及白名單內的人偶實體 (RaceId / SkillId) 的傷害重導向給玩家。寵物與其他召喚物排除在外。
+                    const isMarionette = (attackerEntity && ActorManager.marionetteRaceSet.has(attackerEntity.raceId))
+                                        || ActorManager.marionetteSkillSet.has(event_.SkillId);
+
+                    if (isMarionette) {
+                        let ownerId = attackerEntity?.ownerId;
+
+                        if (!ownerId) {
+                            // 若登場未錄到 OwnerId，人偶技能自動重導向至目前 PC 玩家
+                            const pcEntity = Object.values(this.entityMap).find(e => e.isPC);
+                            if (pcEntity) {
+                                ownerId = pcEntity.id;
+                            }
+                        }
+
+                        if (ownerId && this.entityMap[ownerId]) {
+                            effectiveAttacker = this.entityMap[ownerId];
+                        }
+                    }
+
+                    if (effectiveAttacker) {
+                        effectiveAttacker.onApplyDamage(event_);
+                        effectiveAttacker.group.onApplyDamage(event_);
+                    }
+
+                    if (targetEntity) {
+                        targetEntity.onTakeDamage(event_);
+                        targetEntity.group.onTakeDamage(event_);
+                    }
                 }
                 break;
 
@@ -154,18 +199,18 @@ export class ActorManager {
 
         for (const k in this.entityMap) {
             const v = this.entityMap[k];
-
             v.clear();
+            delete this.entityMap[k];
         }
 
         for (const k in this.groupMap) {
             const v = this.groupMap[k];
-
             v.clear();
+            delete this.groupMap[k];
         }
     }
 
-    private static groupTargetKey(event: protocols.eventEntityAppear): string {
+    public static groupTargetKey(event: protocols.eventEntityAppear): string {
         // pc 일 경우 group안에 entity가 여러개 생기지 않도록
         if (this.pcRaceSet.has(event.RaceId)) {
             return event.Id;
@@ -185,6 +230,9 @@ export abstract class BaseActor implements IEventActor, IUpdateCallback {
     private vueUpdateTrigger?: () => void;
     private vueUpdateTimeout = 0;
     private static vueUpdateTick = 33;
+
+    protected processedApply = new Set<protocols.eventDamage>();
+    protected processedTake = new Set<protocols.eventDamage>();
 
     protected constructor(protected mgr: ActorManager, private _id: string, protected _raceId: number, protected _name: string) {
         this._isPC = ActorManager.pcRaceSet.has(_raceId);
@@ -242,7 +290,7 @@ export abstract class BaseActor implements IEventActor, IUpdateCallback {
         return this._applyDamages;
     }
 
-    private _isPC = false;
+    protected _isPC = false;
     public get isPC() {
         this.vueUpdateTrack?.();
         return this._isPC;
@@ -303,6 +351,9 @@ export abstract class BaseActor implements IEventActor, IUpdateCallback {
 
         this._totalApplyDamage = 0;
         this._applyDamages.length = 0;
+
+        this.processedApply.clear();
+        this.processedTake.clear();
 
         this.vueUpdateRequest();
     }
@@ -377,6 +428,7 @@ export class EntityActor extends BaseActor {
 
         this._name = event.Name;
         this._raceId = event.RaceId;
+        this._isPC = ActorManager.pcRaceSet.has(event.RaceId);
         this._finisherId = '';
         this._guildName = event.GuildName;
         this._ownerId = event.OwnerId;
@@ -385,6 +437,15 @@ export class EntityActor extends BaseActor {
         this._body.Upper = event.Upper;
         this._body.Lower = event.Lower;
 
+        // Update group if race changed
+        const groupKey = ActorManager.groupTargetKey(event);
+        const newGroup = this.mgr.groupMap[groupKey] ??= CustomReactive(new GroupActor(this.mgr, groupKey, event.RaceId, event.Name));
+        if (this._group !== newGroup) {
+            delete this._group.entityMap[this.id];
+            this._group = newGroup;
+            this._group.entityMap[this.id] = this;
+        }
+
         if (ActorManager.pcRaceSet.has(event.RaceId)) {
             // pc일 경우 damage 초기와 안함
             return;
@@ -392,9 +453,15 @@ export class EntityActor extends BaseActor {
 
         this._totalTakeDamage = 0;
         this._takeDamages.length = 0;
+        this.processedTake.clear();
     }
 
     public override onTakeDamage(event: protocols.eventDamage): void {
+        if (this.processedTake.has(event)) {
+            return;
+        }
+        this.processedTake.add(event);
+
         this.vueUpdateRequest();
 
         const attacker = this.mgr.entityMap[event.Id];
@@ -411,6 +478,10 @@ export class EntityActor extends BaseActor {
     }
 
     public override onApplyDamage(event: protocols.eventDamage): void {
+        if (this.processedApply.has(event)) {
+            return;
+        }
+
         this.vueUpdateRequest();
 
         const targetId = event.TargetId;
@@ -420,8 +491,11 @@ export class EntityActor extends BaseActor {
             return;
         }
 
+        this.processedApply.add(event);
+
         const damage: EntityDamage = {
             ...event,
+            Id: this.id,
 
             Conditions: this.getConditionState(event.At),
             TargetConditions: target.getConditionState(event.At),
@@ -541,9 +615,19 @@ export class GroupActor extends BaseActor {
 
         this._takeDamages = this._takeDamages.filter(v => v.Id !== event.Id);
         this._totalTakeDamage = this._takeDamages.reduce((acc, v) => acc + v.Damage, 0);
+        for (const v of this.processedTake) {
+            if (v.Id === event.Id) {
+                this.processedTake.delete(v);
+            }
+        }
     }
 
     public override onTakeDamage(event: protocols.eventDamage): void {
+        if (this.processedTake.has(event)) {
+            return;
+        }
+        this.processedTake.add(event);
+
         this.vueUpdateRequest();
         // console.log('group take damage', this.id, event);
 
