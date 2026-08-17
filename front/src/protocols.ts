@@ -26,6 +26,7 @@ export type eventEntityAppear = eventBase & {
     Lower: number;
     GuildName: string;
     OwnerId: string;
+    IsLocalPC: boolean;
 }
 
 export type eventDamage = eventBase & {

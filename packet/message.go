@@ -33,7 +33,21 @@ func NewMessage(r io.Reader) (Message, error) {
 		return nil, err
 	}
 
-	l := make(Message, 0, elemCount)
+	// elemCount 來自封包內未驗證的 uvarint,垃圾資料可產生高達 2^63 的值 —
+	// 直接以其預配容量等於一次 commit 數十 GB (實測 28.8GB,會耗盡系統記憶體
+	// 並導致遊戲主程式 out of memory)。顯然不可能的數量直接拒絕,
+	// 合理範圍內預配也設上限,超出部分由 append 自然成長
+	const maxElemCount = 1 << 24
+	if elemCount > maxElemCount {
+		return nil, fmt.Errorf("newGamePacket: implausible element count %d", elemCount)
+	}
+
+	capHint := elemCount
+	if capHint > 4096 {
+		capHint = 4096
+	}
+
+	l := make(Message, 0, capHint)
 
 	b := make([]byte, 1)
 	// unused field

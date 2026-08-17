@@ -22,6 +22,46 @@ type eventPublisher struct {
 
 	// mutable
 	currentClientId uint32
+	localPcId       uint64 // 本機玩家實體 id (由 0x7530 statUpdatePrivate 判定)
+}
+
+// 人偶版型的主人 id 位於延伸區塊,以候選 Long 對照快取中的已知玩家 id 解析
+// 必須在持有 t.Lock 時呼叫
+func (t *eventPublisher) resolveMarionetteOwner(entity *packet.EntityInfo) {
+	if entity.OwnerId != 0 || !marionetteRaceSet[entity.RaceId] {
+		return
+	}
+
+	matched := []uint64(nil)
+	for _, cand := range entity.OwnerCandidates {
+		e := t.entityCache[cand]
+		if e == nil || !e.IsUser() {
+			continue
+		}
+
+		dup := false
+		for _, m := range matched {
+			if m == cand {
+				dup = true
+				break
+			}
+		}
+
+		if !dup {
+			matched = append(matched, cand)
+		}
+	}
+
+	if len(matched) < 1 {
+		return
+	}
+
+	entity.OwnerId = matched[0]
+
+	if len(matched) > 1 {
+		// 延伸區塊出現多個玩家 id: 單人實測只會有主人一個,此警告代表隊伍情境需要人工確認
+		logger.Println("marionette owner ambiguous:", entity.Id, "candidates:", matched, "chose:", matched[0])
+	}
 }
 
 type eventClient struct {
@@ -30,18 +70,28 @@ type eventClient struct {
 }
 
 const (
-	opcodeEntityAppear       = 0x520c
-	opcodeEntityDisappear    = 0x520d
+	opcodeEntityAppear      = 0x520c
+	opcodeEntityDisappear   = 0x520d
 	OpcodeCreatureBodyUpdate = 0x520e
-	opcodeEntitiesAppear     = 0x5334
-	opcodeEntitiesDisappear  = 0x5335
-	opcodeEquipmentChanged   = 0x59e6
-	opcodeUnequipment        = 0x59e7
-	opcodeSetFinisher        = 0x7921
-	opcodeCombatAction       = 0x7926
-	opcodeEffectDelayed      = 0x9095
-	opcodeConditionUpdate    = 0xa028
+	opcodeEntitiesAppear    = 0x5334
+	opcodeEntitiesDisappear = 0x5335
+	opcodeEquipmentChanged  = 0x59e6
+	opcodeUnequipment       = 0x59e7
+	opcodeStatUpdatePrivate = 0x7530
+	opcodeSetFinisher       = 0x7921
+	opcodeCombatAction      = 0x7926
+	opcodeEffectDelayed     = 0x9095
+	opcodeConditionUpdate   = 0xa028
 )
+
+// 人偶召喚物種族白名單: 幕演出實體(990104)、皮埃羅(990125)、巨靈(990204)、傀儡實體(990213)
+// 990104 是「第X幕」系技能實際造成傷害的臨時召喚實體 (2026-07-29 兩人隊實測確認)
+var marionetteRaceSet = map[uint32]bool{
+	990104: true,
+	990125: true,
+	990204: true,
+	990213: true,
+}
 
 var le = binary.LittleEndian
 
@@ -84,9 +134,13 @@ func (t *eventPublisher) loop() {
 
 			case opcodeEntityAppear:
 				entity, err := packet.ParseEntityAppearPacket(p.Msg)
-				if err != nil {
+				partial := err != nil
+				if partial {
 					logger.Println("ParseEntityAppearPacket failed:", err)
-					continue
+					// 與複數路徑一致: 名字與種族已解析出來就保留部分資訊
+					if entity == nil || entity.Name == "" || entity.RaceId == 0 {
+						continue
+					}
 				}
 
 				if entity == nil || len(entity.Name) <= 0 || entity.Name[0] == '_' {
@@ -94,13 +148,27 @@ func (t *eventPublisher) loop() {
 					continue
 				}
 
+				if entity.Id == t.localPcId {
+					entity.IsLocalPC = true
+				}
+
 				t.Lock()
+				if partial {
+					// 部分實體: 以快取補齊零值欄位,不可覆蓋已知的完整資訊
+					t.entityCache.mergeFromCache(entity)
+				}
 				t.entityCache.add(entity, p.At)
+				t.resolveMarionetteOwner(entity)
 				t.Unlock()
 
 				e := toEventEntityAppear(p.At.Unix(), entity)
 
 				t.publish(e)
+
+				if partial {
+					// 解析中斷的裝備/狀態清單不可信,跳過差異比對 (避免偽卸裝事件)
+					continue
+				}
 
 				for _, v := range entity.CharacterConditionMap {
 					if !t.entityCache.addOrUpdateCondition(entity.Id, v) {
@@ -171,6 +239,31 @@ func (t *eventPublisher) loop() {
 
 				continue
 
+			case opcodeStatUpdatePrivate:
+				// 私人狀態更新會發給本機玩家「與其寵物/召喚物」,
+				// 只有 PC 種族的實體才能認定為本機玩家
+				if p.Id == 0 || t.localPcId == p.Id {
+					continue
+				}
+
+				var localInfo *packet.EntityInfo
+				t.Lock()
+				if e := t.entityCache[p.Id]; e != nil && e.EntityInfo != nil && e.IsUser() {
+					t.localPcId = p.Id
+					if !e.IsLocalPC {
+						e.IsLocalPC = true
+						localInfo = e.EntityInfo
+					}
+				}
+				t.Unlock()
+
+				if localInfo != nil {
+					// 已出現過的本機玩家: 重發帶 IsLocalPC 的 appear
+					t.publish(toEventEntityAppear(p.At.Unix(), localInfo))
+				}
+
+				continue
+
 			case opcodeEntityDisappear:
 				if len(p.Msg) < 1 || p.Msg[0].Type() != packet.MessageElemTypeLong {
 					logger.Println("invalid packet")
@@ -232,14 +325,30 @@ func (t *eventPublisher) loop() {
 					continue
 				}
 
+				// 先全部入快取,再解析人偶主人 (主人可能就在同一包內)
+				valid := entities[:0]
 				for _, entity := range entities {
 					if len(entity.Name) <= 0 || entity.Name[0] == '_' {
 						// ignore npc
 						continue
 					}
 
+					if entity.Id == t.localPcId {
+						entity.IsLocalPC = true
+					}
+
 					t.Lock()
+					// 複數路徑無法區分完整/部分實體,一律以快取補齊零值欄位
+					t.entityCache.mergeFromCache(entity)
 					t.entityCache.add(entity, p.At)
+					t.Unlock()
+
+					valid = append(valid, entity)
+				}
+
+				for _, entity := range valid {
+					t.Lock()
+					t.resolveMarionetteOwner(entity)
 					t.Unlock()
 
 					e := toEventEntityAppear(p.At.Unix(), entity)
@@ -696,6 +805,7 @@ func toEventEntityAppear(now int64, p *packet.EntityInfo) *eventEntityAppear {
 		Lower:     p.Lower,
 		GuildName: p.GuildName,
 		OwnerId:   ownerId,
+		IsLocalPC: p.IsLocalPC,
 	}
 
 	return v

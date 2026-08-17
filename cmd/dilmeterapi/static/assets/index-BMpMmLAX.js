@@ -7100,7 +7100,8 @@ const _ActorManager = class _ActorManager {
               Upper: 1,
               Lower: 1,
               GuildName: "",
-              OwnerId: ""
+              OwnerId: "",
+              IsLocalPC: false
             });
             attackerEntity = this.entityMap[event_.Id];
           }
@@ -7117,7 +7118,8 @@ const _ActorManager = class _ActorManager {
               Upper: 1,
               Lower: 1,
               GuildName: "",
-              OwnerId: ""
+              OwnerId: "",
+              IsLocalPC: false
             });
             targetEntity = this.entityMap[event_.TargetId];
           }
@@ -7126,9 +7128,14 @@ const _ActorManager = class _ActorManager {
           if (isMarionette) {
             let ownerId = attackerEntity == null ? void 0 : attackerEntity.ownerId;
             if (!ownerId) {
-              const pcEntity = Object.values(this.entityMap).find((e) => e.isPC);
-              if (pcEntity) {
-                ownerId = pcEntity.id;
+              let matchingPC = Object.values(this.entityMap).find((e) => e.isPC && (attackerEntity == null ? void 0 : attackerEntity.name) && e.name === attackerEntity.name);
+              if (matchingPC) {
+                ownerId = matchingPC.id;
+              } else {
+                const pcs = Object.values(this.entityMap).filter((e) => e.isPC);
+                if (pcs.length === 1) {
+                  ownerId = pcs[0].id;
+                }
               }
             }
             if (ownerId && this.entityMap[ownerId]) {
@@ -7198,8 +7205,13 @@ const _ActorManager = class _ActorManager {
       }
       for (const v of this.damages) {
         if (v.Id == Id) {
-          entity.onApplyDamage(v);
-          entity.group.onApplyDamage(v);
+          let creditTo = entity;
+          const isMarionette = _ActorManager.marionetteRaceSet.has(entity.raceId) || _ActorManager.marionetteSkillSet.has(v.SkillId);
+          if (isMarionette && entity.ownerId && this.entityMap[entity.ownerId]) {
+            creditTo = this.entityMap[entity.ownerId];
+          }
+          creditTo.onApplyDamage(v);
+          creditTo.group.onApplyDamage(v);
         } else if (v.TargetId == Id) {
           entity.onTakeDamage(v);
           entity.group.onTakeDamage(v);
@@ -7231,7 +7243,7 @@ const _ActorManager = class _ActorManager {
   }
 };
 _ActorManager.pcRaceSet = /* @__PURE__ */ new Set([8001, 8002, 9001, 9002, 10001, 10002]);
-_ActorManager.marionetteRaceSet = /* @__PURE__ */ new Set([990125, 990204, 990213]);
+_ActorManager.marionetteRaceSet = /* @__PURE__ */ new Set([990104, 990125, 990204, 990213]);
 _ActorManager.marionetteSkillSet = /* @__PURE__ */ new Set([54151, 54152, 54153, 54154, 54155, 59167, 59168, 59169]);
 let ActorManager = _ActorManager;
 const _BaseActor = class _BaseActor {
@@ -7359,6 +7371,7 @@ class EntityActor extends BaseActor {
     this._group = _group;
     this._guildName = "";
     this._ownerId = "";
+    this._isLocalPC = false;
     this._conditionMap = {};
     this._conditionHistory = [];
     this._finisherId = "";
@@ -7373,6 +7386,11 @@ class EntityActor extends BaseActor {
     var _a;
     (_a = this.vueUpdateTrack) == null ? void 0 : _a.call(this);
     return this._ownerId;
+  }
+  get isLocalPC() {
+    var _a;
+    (_a = this.vueUpdateTrack) == null ? void 0 : _a.call(this);
+    return this._isLocalPC;
   }
   get group() {
     var _a;
@@ -7408,6 +7426,7 @@ class EntityActor extends BaseActor {
     this._finisherId = "";
     this._guildName = event.GuildName;
     this._ownerId = event.OwnerId;
+    this._isLocalPC = event.IsLocalPC;
     this._body.Height = event.Height;
     this._body.Weight = event.Weight;
     this._body.Upper = event.Upper;
@@ -21921,6 +21940,71 @@ const VInput = genericComponent()({
     };
   }
 });
+const makeVCheckboxProps = propsFactory({
+  ...makeVInputProps(),
+  ...omit(makeVCheckboxBtnProps(), ["inline"])
+}, "VCheckbox");
+const VCheckbox = genericComponent()({
+  name: "VCheckbox",
+  inheritAttrs: false,
+  props: makeVCheckboxProps(),
+  emits: {
+    "update:modelValue": (value) => true,
+    "update:focused": (focused) => true
+  },
+  setup(props, _ref) {
+    let {
+      attrs,
+      slots
+    } = _ref;
+    const model = useProxiedModel(props, "modelValue");
+    const {
+      isFocused,
+      focus,
+      blur
+    } = useFocus(props);
+    const uid2 = getUid();
+    const id = computed(() => props.id || `checkbox-${uid2}`);
+    useRender(() => {
+      const [rootAttrs, controlAttrs] = filterInputAttrs(attrs);
+      const inputProps = VInput.filterProps(props);
+      const checkboxProps = VCheckboxBtn.filterProps(props);
+      return createVNode(VInput, mergeProps({
+        "class": ["v-checkbox", props.class]
+      }, rootAttrs, inputProps, {
+        "modelValue": model.value,
+        "onUpdate:modelValue": ($event) => model.value = $event,
+        "id": id.value,
+        "focused": isFocused.value,
+        "style": props.style
+      }), {
+        ...slots,
+        default: (_ref2) => {
+          let {
+            id: id2,
+            messagesId,
+            isDisabled,
+            isReadonly: isReadonly2,
+            isValid: isValid2
+          } = _ref2;
+          return createVNode(VCheckboxBtn, mergeProps(checkboxProps, {
+            "id": id2.value,
+            "aria-describedby": messagesId.value,
+            "disabled": isDisabled.value,
+            "readonly": isReadonly2.value
+          }, controlAttrs, {
+            "error": isValid2.value === false,
+            "modelValue": model.value,
+            "onUpdate:modelValue": ($event) => model.value = $event,
+            "onFocus": focus,
+            "onBlur": blur
+          }), slots);
+        }
+      });
+    });
+    return {};
+  }
+});
 const GoToSymbol = Symbol.for("vuetify:goto");
 function genDefaults() {
   return {
@@ -26163,6 +26247,17 @@ const _sfc_main = /* @__PURE__ */ defineComponent$1({
     };
     const mabiConnected = ref(false);
     const isConnectingMabi = ref(false);
+    const saveRawData = ref(false);
+    fetch("/api/settings").then((r) => r.json()).then((data) => {
+      if (data.SaveRawData === "true") saveRawData.value = true;
+    }).catch(() => {
+    });
+    watch(saveRawData, (newVal) => {
+      fetch("/api/settings", {
+        method: "POST",
+        body: JSON.stringify({ SaveRawData: newVal ? "true" : "false" })
+      }).catch(console.error);
+    });
     const checkMabiStatus = async () => {
       try {
         const res = await fetch("/api/mabinogi/status");
@@ -26177,6 +26272,11 @@ const _sfc_main = /* @__PURE__ */ defineComponent$1({
     const connectMabi = async () => {
       isConnectingMabi.value = true;
       try {
+        await fetch("/api/settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ SaveRawData: saveRawData.value ? "true" : "false" })
+        });
         const res = await fetch("/api/mabinogi/connect", { method: "POST" });
         if (res.ok) {
           const data = await res.json();
@@ -26389,6 +26489,7 @@ const _sfc_main = /* @__PURE__ */ defineComponent$1({
       download,
       loadFromFile,
       loadFromServer,
+      saveRawData,
       tab,
       mabiConnected,
       isConnectingMabi,
@@ -27167,6 +27268,15 @@ function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
               class: "mr-2",
               style: { "max-width": "100px" }
             }, null, 8, ["modelValue", "items"]),
+            createVNode(VCheckbox, {
+              modelValue: _ctx.saveRawData,
+              "onUpdate:modelValue": _cache[1] || (_cache[1] = ($event) => _ctx.saveRawData = $event),
+              label: "Log Raw Data",
+              density: "compact",
+              "hide-details": "",
+              color: "primary",
+              class: "mr-2"
+            }, null, 8, ["modelValue"]),
             createVNode(VTooltip, null, {
               activator: withCtx(({ props }) => [
                 createVNode(VBtn, mergeProps({ onClick: _ctx.loadFromFile }, props, {
@@ -27241,7 +27351,7 @@ function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
     }),
     createVNode(VTabs, {
       modelValue: _ctx.tab,
-      "onUpdate:modelValue": _cache[1] || (_cache[1] = ($event) => _ctx.tab = $event)
+      "onUpdate:modelValue": _cache[2] || (_cache[2] = ($event) => _ctx.tab = $event)
     }, {
       default: withCtx(() => [
         createVNode(VTab, { value: "applyDamageBySkill" }, {
@@ -27261,7 +27371,7 @@ function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
     }, 8, ["modelValue"]),
     createVNode(VTabsWindow, {
       modelValue: _ctx.tab,
-      "onUpdate:modelValue": _cache[2] || (_cache[2] = ($event) => _ctx.tab = $event)
+      "onUpdate:modelValue": _cache[3] || (_cache[3] = ($event) => _ctx.tab = $event)
     }, {
       default: withCtx(() => [
         createVNode(VTabsWindowItem, { value: "applyDamageBySkill" }, {
@@ -37699,4 +37809,4 @@ app.config.errorHandler = (err) => {
   console.error(err);
 };
 app.use(vuetify).mount("#app");
-//# sourceMappingURL=index-BNH63Sui.js.map
+//# sourceMappingURL=index-BMpMmLAX.js.map

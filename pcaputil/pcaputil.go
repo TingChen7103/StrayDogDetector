@@ -49,6 +49,10 @@ func FindNic() (string, error) {
 
 		cancel()
 		r.Close()
+
+		if found != "" {
+			break
+		}
 	}
 
 	if found == "" {

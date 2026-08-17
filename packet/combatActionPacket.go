@@ -283,6 +283,12 @@ func parseCombatActionPacket(id uint64, msg Message) (*CombatActionPacket, error
 	}
 
 	if (ttype & CombatActionTypeTakeHit) != 0 {
+		// 人偶「幕」系技能的變體會在 hit 區塊前多帶 Long (相關實體 id);
+		// hit 區塊必以 Int options 開頭,跳過開頭的 Long 以相容 (實測 2026-07-29 skill 54152)
+		for skip := 0; skip < 4 && len(msg) > 0 && msg[0].Type() == MessageElemTypeLong; skip++ {
+			msg = msg[1:]
+		}
+
 		if len(msg) < 4 {
 			return nil, fmt.Errorf("parseCombatActionPacket: hit has too few elements")
 		}

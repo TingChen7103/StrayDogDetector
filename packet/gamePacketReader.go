@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/gopacket/gopacket"
@@ -23,7 +24,8 @@ type GameServerPacketReader struct {
 	ctx      context.Context
 	packetCh chan *GamePacket
 
-	// mutable
+	// mutable; mu 保護以下欄位 (Close 可能與 readPacketLoop 並行)
+	mu     sync.Mutex
 	handle *pcap.Handle
 	fd     *os.File
 
@@ -32,27 +34,69 @@ type GameServerPacketReader struct {
 }
 
 type GameServerPacketReaderOpt struct {
-	Ctx      context.Context
-	FileName string
-	NicName  string
-	ClientIp string
+	Ctx         context.Context
+	FileName    string
+	NicName     string
+	ClientIp    string
+	SaveRawData bool
+}
+
+// 以 (伺服器IP, 伺服器port, 客戶端port) 區分 TCP 連線;
+// filter 只收 server→client 方向,客戶端 port 足以區分頻道連線
+type flowKey struct {
+	srcIP   [4]byte
+	srcPort uint16
+	dstPort uint16
 }
 
 type gamePacketPayload struct {
-	relSeq uint32
-	data   []byte
-	at     time.Time
+	flow flowKey
+	data []byte
+	at   time.Time
+
+	// aligned: 此 payload 的第一個 byte 是框架邊界 (新連線丟棄 4-byte crypt key 之後)
+	aligned bool
+	// desync: 此 payload 之前有資料遺失,解析器必須重新同步
+	desync bool
 }
 
-type pendingTcpLayer struct {
-	tcpLayer layers.TCP
-	ci       gopacket.CaptureInfo
+type pendingSeg struct {
+	seq  uint32
+	data []byte
+	at   time.Time
+}
+
+// 單一 TCP 連線的重組狀態
+type flowReasm struct {
+	started      bool
+	nextSeq      uint32
+	pending      []pendingSeg // 依 seq 排序的亂序/缺口暫存
+	pendingBytes int
+	gapSince     time.Time
+	lastSeen     time.Time
+
+	alignedNext bool
+	desyncNext  bool
 }
 
 const pcapQueueSize = 100
 const pcapBufferSize = 32 * 1024 * 1024
 const pcapPromisc = true
 const packetQueueSize = 100
+
+// 最大合法框架長度 (進場快照實測可達 ~1.35MB)
+const maxFrameLength = 0x100_0000
+
+// 缺口暫存上限: 超過即放棄缺口、跳到已收到的最早資料重新同步
+const maxPendingBytes = 4 * 1024 * 1024
+const maxPendingSegs = 4096
+const gapTimeout = 3 * time.Second
+
+const maxFlows = 32
+
+// 未同步時的緩衝上限 (假候選可能宣告超大長度,避免無限等待)
+const maxUnsyncedBuffer = 4 * 1024 * 1024
+const unsyncedKeepBytes = 2 * 1024 * 1024
 
 var ErrTooShortPacket = errors.New("too short packet")
 
@@ -75,10 +119,13 @@ func NewGameServerPacketReader(opt *GameServerPacketReaderOpt) (*GameServerPacke
 	}
 
 	// 20251228 Hans: 不產生封包紀錄檔(.pcapng)
-	// if err := v.openLog(); err != nil {
-	// 	logger.Println("openLog failed", err)
-	// 	return nil, err
-	// }
+	// 20260728: 根據前端設定決定是否產生紀錄檔
+	if opt.SaveRawData {
+		if err := v.openLog(); err != nil {
+			logger.Println("openLog failed", err)
+			return nil, err
+		}
+	}
 
 	payloadCh := (<-chan gamePacketPayload)(nil)
 	err := error(nil)
@@ -102,90 +149,87 @@ func NewGameServerPacketReader(opt *GameServerPacketReaderOpt) (*GameServerPacke
 }
 
 func (t *GameServerPacketReader) packetLoop(payloadCh <-chan gamePacketPayload) {
-
-	buffer := bytes.NewBuffer(nil)
-	lastRelSeq, lastAt := uint32(0), time.Now()
-	payloads := make([]gamePacketPayload, 0, 100)
-
-	skipPayload := func(n int) {
-		for n > 0 {
-			if n < len(payloads[0].data) {
-				lastRelSeq, lastAt = payloads[0].relSeq, payloads[0].at
-				payloads[0].data = payloads[0].data[n:]
-				return
-			}
-
-			n -= len(payloads[0].data)
-			lastRelSeq, lastAt = payloads[0].relSeq, payloads[0].at
-			payloads = payloads[1:]
-		}
-	}
-
-	nextPayload := func() {
-		buffer.Reset()
-
-		if len(payloads) < 1 {
-			return
-		}
-
-		payloads = payloads[1:]
-		if len(payloads) < 1 {
-			return
-		}
-
-		for _, v := range payloads {
-			buffer.Write(v.data)
-		}
-
-		lastRelSeq = payloads[0].relSeq
-	}
-
-	pushPayload := func(payloadData gamePacketPayload) {
-		if buffer.Len() < 1 {
-			buffer.Reset()
-		}
-
-		if len(payloads) < 1 {
-			lastRelSeq, lastAt = payloadData.relSeq, payloadData.at
-		}
-
-		payloads = append(payloads, payloadData)
-		buffer.Write(payloadData.data)
-	}
+	parsers := make(map[flowKey]*streamParser)
 
 	for {
+		payloadData := gamePacketPayload{}
+
 		select {
 		case <-t.ctx.Done():
 			return
 
-		case payloadData := <-payloadCh:
-			pushPayload(payloadData)
+		case payloadData = <-payloadCh:
 		}
+
+		p := parsers[payloadData.flow]
+		if p == nil {
+			if len(parsers) >= maxFlows {
+				evictOldestParser(parsers)
+			}
+
+			p = &streamParser{}
+			parsers[payloadData.flow] = p
+		}
+
+		p.feed(payloadData)
 
 	readerLoop:
 		for {
-			msg, err := gamePacketReader(buffer, lastAt)
+			msg, err := p.next()
 			if err != nil {
 				if err == io.EOF {
 					break readerLoop
 				}
 
-				logger.Printf("game packet parse error %v %v", lastRelSeq, err)
-				nextPayload()
+				if err == ErrTooShortPacket {
+					// 協定內的無 op 小框架,按設計跳過,非錯誤
+					continue
+				}
+
+				logger.Printf("game packet parse error flow %v %v", payloadData.flow, err)
 				continue
 			}
 
 			if msg != nil {
-				// logger.Println("game packet", msg.Op, msg.Id, len(msg.Msg), lastRelSeq, lastAt)
-				t.packetCh <- msg
-				skipPayload(len(msg.RawPacket))
+				select {
+				case t.packetCh <- msg:
+				case <-t.ctx.Done():
+					return
+				}
 			}
 		}
 	}
 }
 
+func evictOldestParser(parsers map[flowKey]*streamParser) {
+	// 優先驅逐從未同步成功的 (多半是被 filter 放進來的無關流量)
+	oldestKey, oldestAt := flowKey{}, time.Time{}
+	first, haveUnsynced := true, false
+
+	for k, v := range parsers {
+		if haveUnsynced && v.synced {
+			continue
+		}
+
+		if !haveUnsynced && !v.synced {
+			haveUnsynced = true
+			first = true
+		}
+
+		if first || v.lastSeen.Before(oldestAt) {
+			oldestKey, oldestAt = k, v.lastSeen
+			first = false
+		}
+	}
+
+	if !first {
+		delete(parsers, oldestKey)
+	}
+}
+
 func (t *GameServerPacketReader) openNic(nic string, filter string) (<-chan gamePacketPayload, error) {
-	handle, err := pcap.OpenLive(nic, pcapBufferSize, pcapPromisc, pcap.BlockForever)
+	// 有限 timeout 讓閒置期間仍可定期 flush pcapng 與檢查缺口逾時
+	handle, err := pcap.OpenLive(nic, pcapBufferSize, pcapPromisc, 500*time.Millisecond)
 	if err != nil {
 		logger.Println(err)
 		return nil, err
@@ -197,7 +241,6 @@ func (t *GameServerPacketReader) openNic(nic string, filter string) (<-chan game
 	}
 
 	ch := make(chan gamePacketPayload, pcapQueueSize)
-	// ps := gopacket.NewPacketSource(handle, handle.LinkType())
 
 	go t.readPacketLoop(ch)
 
@@ -234,16 +277,12 @@ func (t *GameServerPacketReader) openFile(file string, filter string) (<-chan ga
 
 	ch := make(chan gamePacketPayload, pcapQueueSize)
 
-	time.AfterFunc(20*time.Second, func() {
-		logger.Println("start readPacketLoop", file)
-		go t.readPacketLoop(ch)
-	})
-
+	go t.readPacketLoop(ch)
 	return ch, nil
 }
 
 func (t *GameServerPacketReader) openLog() error {
-	fileName := fmt.Sprintf("packet_capture_%v.pcapng", constants.SERVER_START_AT)
+	fileName := fmt.Sprintf("packet_capture_%v.pcapng", time.Now().Format("20060102_150405"))
 	fd, err := os.OpenFile(fileName, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
 	if err != nil {
 		logger.Println(err)
@@ -259,11 +298,13 @@ func (t *GameServerPacketReader) openLog() error {
 	}
 
 	t.logHandle = handle
+	logger.Println("Raw packet capture started:", fileName)
 
 	return nil
 }
 
 func (t *GameServerPacketReader) readPacketLoop(ch chan<- gamePacketPayload) {
+	defer t.Close()
 	ethLayer := layers.Ethernet{}
 	ip4Layer := layers.IPv4{}
 	tcpLayer := layers.TCP{}
@@ -272,189 +313,333 @@ func (t *GameServerPacketReader) readPacketLoop(ch chan<- gamePacketPayload) {
 	layerParser := gopacket.NewDecodingLayerParser(layers.LayerTypeEthernet, &ethLayer, &ip4Layer, &tcpLayer, &payload)
 	packetLayers := []gopacket.LayerType(nil)
 
-	// 패킷 순서 섞이는 것 땜빵
-	baseSeq := uint32(0)
-	nextSeq, prevDstPort := uint32(0), layers.TCPPort(0)
-	pendingTcpLayers := make([]pendingTcpLayer, 0, packetQueueSize)
+	flows := make(map[flowKey]*flowReasm)
+	lastFlush := time.Now()
+
+	// ctx 取消時也要能離開 (消費端可能已退出),否則 defer Close 永不執行、pcapng 不會 flush
+	send := func(fl *flowReasm, key flowKey, data []byte, at time.Time) bool {
+		pd := gamePacketPayload{
+			flow:    key,
+			data:    data,
+			at:      at,
+			aligned: fl.alignedNext,
+			desync:  fl.desyncNext,
+		}
+		fl.alignedNext, fl.desyncNext = false, false
+
+		select {
+		case ch <- pd:
+			return true
+		case <-t.ctx.Done():
+			return false
+		}
+	}
+
+	drainPending := func(fl *flowReasm, key flowKey) bool {
+		for len(fl.pending) > 0 {
+			s := fl.pending[0]
+			d := int32(s.seq - fl.nextSeq)
+			if d > 0 {
+				break
+			}
+
+			data := s.data
+			if d < 0 {
+				// 與已送出的資料重疊,修剪掉重複部分
+				if int32(s.seq+uint32(len(s.data))-fl.nextSeq) <= 0 {
+					fl.pending = fl.pending[1:]
+					fl.pendingBytes -= len(s.data)
+					continue
+				}
+
+				data = data[fl.nextSeq-s.seq:]
+			}
+
+			if !send(fl, key, data, s.at) {
+				return false
+			}
+
+			fl.nextSeq = s.seq + uint32(len(s.data))
+			fl.pending = fl.pending[1:]
+			fl.pendingBytes -= len(s.data)
+		}
+
+		if len(fl.pending) == 0 {
+			fl.gapSince = time.Time{}
+		}
+
+		return true
+	}
+
+	// 放棄目前缺口: 跳到最早的暫存段,並要求解析器重新同步
+	jumpGap := func(fl *flowReasm, key flowKey) bool {
+		if len(fl.pending) < 1 {
+			return true
+		}
+
+		fl.nextSeq = fl.pending[0].seq
+		fl.desyncNext = true
+		fl.alignedNext = false
+		fl.gapSince = time.Time{}
+		return drainPending(fl, key)
+	}
+
+	t.mu.Lock()
+	handle := t.handle
+	t.mu.Unlock()
+	if handle == nil {
+		return
+	}
+
+	// 缺口逾時掃描: 不能只靠同一條流的下一個封包觸發
+	sweepGaps := func(now time.Time) bool {
+		for k, ofl := range flows {
+			if !ofl.gapSince.IsZero() && now.Sub(ofl.gapSince) > gapTimeout {
+				logger.Println("gap timeout, resync", k)
+				if !jumpGap(ofl, k) {
+					return false
+				}
+			}
+		}
+		return true
+	}
 
 	for i := 0; t.ctx.Err() == nil; i++ {
-		b, ci, err := t.handle.ReadPacketData()
+		b, ci, err := handle.ReadPacketData()
 		if err != nil {
+			if err == pcap.NextErrorTimeoutExpired {
+				// 閒置喚醒 (live 模式): 維持 pcapng flush 與缺口逾時檢查
+				t.mu.Lock()
+				if t.logHandle != nil && time.Since(lastFlush) > 2*time.Second {
+					_ = t.logHandle.Flush()
+					lastFlush = time.Now()
+				}
+				t.mu.Unlock()
+
+				if !sweepGaps(time.Now()) {
+					return
+				}
+				continue
+			}
+
 			logger.Println(err, i)
 			break
 		}
 
+		t.mu.Lock()
 		if t.logHandle != nil {
 			// ignore error
 			_ = t.logHandle.WritePacket(ci, b)
+
+			// 定期 flush,避免行程被強制結束時 pcapng 尾端遺失
+			if time.Since(lastFlush) > 2*time.Second {
+				_ = t.logHandle.Flush()
+				lastFlush = time.Now()
+			}
 		}
+		t.mu.Unlock()
 
 		if err := layerParser.DecodeLayers(b, &packetLayers); err != nil {
 			logger.Println(err)
 			continue
 		}
 
-		if i == 0 {
-			baseSeq = tcpLayer.Seq
+		hasTcp := false
+		for _, layer := range packetLayers {
+			if layer == layers.LayerTypeTCP {
+				hasTcp = true
+			}
 		}
 
-		for _, layer := range packetLayers {
-			if layer != layers.LayerTypeTCP || len(tcpLayer.Payload) < 1 {
-				continue
-			}
-
-			if nextSeq != 0 && tcpLayer.Seq != nextSeq {
-				// connection이 바뀐 경우 (채널 이동등)
-				if prevDstPort != tcpLayer.DstPort {
-					for _, v := range pendingTcpLayers {
-						ch <- gamePacketPayload{
-							relSeq: v.tcpLayer.Seq - baseSeq,
-							data:   v.tcpLayer.Payload,
-							at:     v.ci.Timestamp,
-						}
-					}
-
-					pendingTcpLayers = pendingTcpLayers[:0]
-					prevDstPort = tcpLayer.DstPort
-
-					baseSeq = tcpLayer.Seq
-					nextSeq = tcpLayer.Seq + uint32(len(tcpLayer.Payload))
-
-					if len(tcpLayer.Payload) == 4 {
-						// crypt key
-						continue
-					}
-
-					ch <- gamePacketPayload{
-						relSeq: tcpLayer.Seq - baseSeq,
-						data:   tcpLayer.Payload,
-						at:     ci.Timestamp,
-					}
-
-					continue
-				}
-
-				// align 틀어짐
-				logger.Println("packet align error", i, nextSeq, tcpLayer.Seq)
-
-				if tcpLayer.Seq < nextSeq {
-					if tcpLayer.Seq+uint32(len(tcpLayer.Payload)) >= nextSeq {
-						// 겹치는 부분 버려서 해결이 되는 경우
-						payload := tcpLayer.Payload[nextSeq-tcpLayer.Seq:]
-						if len(payload) > 0 {
-							ch <- gamePacketPayload{
-								relSeq: nextSeq - baseSeq,
-								data:   payload,
-								at:     ci.Timestamp,
-							}
-						}
-
-						nextSeq = tcpLayer.Seq + uint32(len(tcpLayer.Payload))
-						continue
-					}
-				}
-
-				if len(pendingTcpLayers) >= packetQueueSize {
-					// 꽉 찬 경우 보류 목록을 보내고 비워버림
-					for _, v := range pendingTcpLayers {
-						ch <- gamePacketPayload{
-							relSeq: v.tcpLayer.Seq - baseSeq,
-							data:   v.tcpLayer.Payload,
-							at:     v.ci.Timestamp,
-						}
-					}
-
-					pendingTcpLayers = pendingTcpLayers[:0]
-
-					ch <- gamePacketPayload{
-						relSeq: tcpLayer.Seq - baseSeq,
-						data:   tcpLayer.Payload,
-						at:     ci.Timestamp,
-					}
-					nextSeq = tcpLayer.Seq + uint32(len(tcpLayer.Payload))
-					continue
-				}
-
-				pendingTcpLayers = append(pendingTcpLayers, pendingTcpLayer{
-					tcpLayer: tcpLayer,
-					ci:       ci,
-				})
-				continue
-			}
-
-			ch <- gamePacketPayload{
-				relSeq: tcpLayer.Seq - baseSeq,
-				data:   tcpLayer.Payload,
-				at:     ci.Timestamp,
-			}
-			nextSeq = tcpLayer.Seq + uint32(len(tcpLayer.Payload))
-			prevDstPort = tcpLayer.DstPort
-
-			if len(pendingTcpLayers) > 0 {
-				/*
-					align이 틀어지는 경우
-					1. 재전송 - 재전송일 경우 겹치는 부분을 버려야 한다
-					2. out of order - 앞 패킷이 뒤에 오는 경우
-				*/
-
-				for _, v := range pendingTcpLayers {
-					if v.tcpLayer.Seq == nextSeq {
-						ch <- gamePacketPayload{
-							relSeq: v.tcpLayer.Seq - baseSeq,
-							data:   v.tcpLayer.Payload,
-							at:     v.ci.Timestamp,
-						}
-						nextSeq = v.tcpLayer.Seq + uint32(len(v.tcpLayer.Payload))
-						pendingTcpLayers = pendingTcpLayers[1:]
-						continue
-					}
-
-					if v.tcpLayer.Seq < nextSeq {
-						payload := v.tcpLayer.Payload
-
-						if v.tcpLayer.Seq+uint32(len(v.tcpLayer.Payload)) < nextSeq {
-							pendingTcpLayers = pendingTcpLayers[1:]
-							continue
-						}
-
-						// 겹치는 부분 버림
-						payload = payload[nextSeq-v.tcpLayer.Seq:]
-						if len(payload) > 0 {
-							ch <- gamePacketPayload{
-								relSeq: nextSeq - baseSeq,
-								data:   payload,
-								at:     v.ci.Timestamp,
-							}
-						}
-
-						nextSeq = v.tcpLayer.Seq + uint32(len(v.tcpLayer.Payload))
-						pendingTcpLayers = pendingTcpLayers[1:]
-						continue
-					}
-
-					// 아직 못받은 패킷이 있다
-					break
-				}
-			}
-
+		if !hasTcp {
 			continue
 		}
 
-		if i&((1<<10)-1) == 0 {
-			time.Sleep(5 * time.Millisecond)
+		finOrRst := tcpLayer.FIN || tcpLayer.RST
+
+		key := flowKey{
+			srcPort: uint16(tcpLayer.SrcPort),
+			dstPort: uint16(tcpLayer.DstPort),
+		}
+		copy(key.srcIP[:], ip4Layer.SrcIP.To4())
+
+		if len(tcpLayer.Payload) < 1 {
+			// 連線結束: 榨出殘餘 pending 後移除流狀態,避免連接埠重用時沿用舊 seq
+			if finOrRst {
+				if fl := flows[key]; fl != nil {
+					for len(fl.pending) > 0 {
+						if !jumpGap(fl, key) {
+							return
+						}
+					}
+					delete(flows, key)
+				}
+			}
+			continue
+		}
+
+		fl := flows[key]
+		if fl == nil {
+			if len(flows) >= maxFlows {
+				// 驅逐前先榨出殘餘 pending
+				if k, ofl := oldestFlow(flows); ofl != nil {
+					for len(ofl.pending) > 0 {
+						if !jumpGap(ofl, k) {
+							return
+						}
+					}
+					delete(flows, k)
+				}
+			}
+
+			fl = &flowReasm{}
+			flows[key] = fl
+		}
+		fl.lastSeen = ci.Timestamp
+
+		if fl.started {
+			// 序號差距離譜: 連接埠重用的新連線 (FIN/RST 沒被擷取到),重置流狀態
+			if d := int32(tcpLayer.Seq - fl.nextSeq); d < -(1<<28) || d > (1<<28) {
+				*fl = flowReasm{lastSeen: ci.Timestamp, desyncNext: true}
+			}
+		}
+
+		if !fl.started {
+			fl.started = true
+			fl.nextSeq = tcpLayer.Seq + uint32(len(tcpLayer.Payload))
+			// 可能是驅逐/FIN 清除後重建的流,舊解析器須重新同步
+			fl.desyncNext = true
+
+			if len(tcpLayer.Payload) == 4 {
+				// 新連線的第一個 payload 是 4-byte crypt key,丟棄後即為框架邊界
+				fl.alignedNext = true
+				continue
+			}
+
+			// 從連線中途開始擷取,解析器需自行搜尋框架邊界
+			if !send(fl, key, tcpLayer.Payload, ci.Timestamp) {
+				return
+			}
+			continue
+		}
+
+		diff := int32(tcpLayer.Seq - fl.nextSeq)
+
+		switch {
+		case diff == 0:
+			if !send(fl, key, tcpLayer.Payload, ci.Timestamp) {
+				return
+			}
+			fl.nextSeq += uint32(len(tcpLayer.Payload))
+
+			if !drainPending(fl, key) {
+				return
+			}
+
+		case diff < 0:
+			// 重傳: 只送出未見過的部分
+			end := tcpLayer.Seq + uint32(len(tcpLayer.Payload))
+			if int32(end-fl.nextSeq) > 0 {
+				if !send(fl, key, tcpLayer.Payload[fl.nextSeq-tcpLayer.Seq:], ci.Timestamp) {
+					return
+				}
+				fl.nextSeq = end
+
+				if !drainPending(fl, key) {
+					return
+				}
+			}
+
+		default:
+			// 缺口: 暫存等待補齊
+			insertPending(fl, pendingSeg{
+				seq:  tcpLayer.Seq,
+				data: tcpLayer.Payload,
+				at:   ci.Timestamp,
+			})
+
+			if fl.gapSince.IsZero() {
+				fl.gapSince = ci.Timestamp
+			}
+
+			if fl.pendingBytes > maxPendingBytes ||
+				len(fl.pending) > maxPendingSegs ||
+				ci.Timestamp.Sub(fl.gapSince) > gapTimeout {
+
+				logger.Println("gap give-up, resync", key, fl.nextSeq, fl.pending[0].seq)
+				if !jumpGap(fl, key) {
+					return
+				}
+			}
+		}
+
+		// FIN/RST 帶 payload: 處理完畢後移除流狀態
+		if finOrRst {
+			for len(fl.pending) > 0 {
+				if !jumpGap(fl, key) {
+					return
+				}
+			}
+			delete(flows, key)
+		}
+
+		if !sweepGaps(ci.Timestamp) {
+			return
 		}
 	}
 
-	for _, v := range pendingTcpLayers {
-		ch <- gamePacketPayload{
-			relSeq: v.tcpLayer.Seq - baseSeq,
-			data:   v.tcpLayer.Payload,
-			at:     v.ci.Timestamp,
+	// 讀取結束 (檔案 EOF / handle 關閉): 盡量榨出暫存中的資料
+	for key, fl := range flows {
+		for len(fl.pending) > 0 {
+			if !jumpGap(fl, key) {
+				return
+			}
 		}
 	}
 }
 
+func insertPending(fl *flowReasm, s pendingSeg) {
+	pos := len(fl.pending)
+	for i, v := range fl.pending {
+		if int32(s.seq-v.seq) < 0 {
+			pos = i
+			break
+		}
+
+		if s.seq == v.seq {
+			// 重複段,保留先到的
+			return
+		}
+	}
+
+	fl.pending = append(fl.pending, pendingSeg{})
+	copy(fl.pending[pos+1:], fl.pending[pos:])
+	fl.pending[pos] = s
+	fl.pendingBytes += len(s.data)
+}
+
+func oldestFlow(flows map[flowKey]*flowReasm) (flowKey, *flowReasm) {
+	oldestKey, oldestAt := flowKey{}, time.Time{}
+	first := true
+
+	for k, v := range flows {
+		if first || v.lastSeen.Before(oldestAt) {
+			oldestKey, oldestAt = k, v.lastSeen
+			first = false
+		}
+	}
+
+	if first {
+		return flowKey{}, nil
+	}
+
+	return oldestKey, flows[oldestKey]
+}
+
 func (t *GameServerPacketReader) Close() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
 	if t.handle != nil {
 		t.handle.Close()
 		t.handle = nil
@@ -480,14 +665,75 @@ func (t *GameServerPacketReader) PacketCh() <-chan *GamePacket {
 	return t.packetCh
 }
 
-func gamePacketReader(buffer *bytes.Buffer, at time.Time) (*GamePacket, error) {
+/*
+	單一 TCP 連線的框架解析器
+
+	框架格式 (經 7 個實錄 pcapng、13,163 框驗證):
+	byte0        不固定 (非 magic,疑似 checksum/序號)
+	byte1-4      LE uint32 框架總長 (含 6-byte 標頭),實測可達 ~1.35MB
+	byte5        flag (0..4;1=heartbeat、2=server only 為 short packet)
+	之後         BE uint32 op + BE uint64 id + uvarint(訊息位元組長) + 型別標記訊息
+
+	同步後純靠長度鏈接;失去同步時掃描候選標頭,
+	以「訊息剛好填滿框架」驗證後才鎖定,避免鎖上 payload 內的假標頭。
+*/
+type streamParser struct {
+	buffer   bytes.Buffer
+	at       time.Time
+	lastSeen time.Time
+
+	synced  bool
+	scanned int
+	cands   []int
+}
+
+func (p *streamParser) feed(pd gamePacketPayload) {
+	if pd.desync {
+		p.buffer.Reset()
+		p.synced = false
+		p.resetScan()
+	}
+
+	if pd.aligned {
+		// 框架邊界確定 (新連線 crypt key 之後): 丟棄任何殘留資料,直接進入同步狀態
+		p.buffer.Reset()
+		p.synced = true
+		p.resetScan()
+	}
+
+	p.buffer.Write(pd.data)
+	p.at = pd.at
+	p.lastSeen = pd.at
+}
+
+func (p *streamParser) resetScan() {
+	p.cands = p.cands[:0]
+	p.scanned = 0
+}
+
+func (p *streamParser) desyncByte() {
+	p.buffer.Next(1)
+	p.synced = false
+	p.resetScan()
+}
+
+func (p *streamParser) next() (*GamePacket, error) {
+	if !p.synced {
+		if !p.trySync() {
+			return nil, io.EOF
+		}
+	}
+
+	return p.readFrame()
+}
+
+func (p *streamParser) readFrame() (*GamePacket, error) {
 	headerSize := 6
 
-	rawPacketBuffer := bytes.NewBuffer(nil)
-	b := buffer.Bytes()
+	b := p.buffer.Bytes()
 
 	// 헤더 읽기에 아직 부족
-	if len(b) < 6 {
+	if len(b) < headerSize {
 		return nil, io.EOF
 	}
 
@@ -497,13 +743,14 @@ func gamePacketReader(buffer *bytes.Buffer, at time.Time) (*GamePacket, error) {
 	// maybe
 	flag := b[5]
 
-	// ?
-	if length == 0 || length > 0x100_0000 {
+	if length < uint32(headerSize) || length > maxFrameLength {
+		p.desyncByte()
 		err := fmt.Errorf("invalid packet length %v", length)
 		return nil, err
 	}
 
 	if flag > 4 {
+		p.desyncByte()
 		err := fmt.Errorf("invalid flag %v", flag)
 		return nil, err
 	}
@@ -513,18 +760,17 @@ func gamePacketReader(buffer *bytes.Buffer, at time.Time) (*GamePacket, error) {
 
 	if isShortPacket {
 		// 패킷이 아직 모자람
-		if len(b) < int(length)-6 {
+		if len(b) < int(length) {
 			return nil, io.EOF
 		}
 
-		shortBody := b[6:int(length)]
-		rawPacketBuffer.Write(shortBody)
+		shortBody := make([]byte, int(length)-headerSize)
+		copy(shortBody, b[headerSize:int(length)])
 
-		buffer.Next(int(length))
+		p.buffer.Next(int(length))
 
-		// checksum := uint32(0)
 		v := &GamePacket{
-			At:     at,
+			At:     p.at,
 			Sign:   sign,
 			Length: length,
 			Flag:   flag,
@@ -532,56 +778,69 @@ func gamePacketReader(buffer *bytes.Buffer, at time.Time) (*GamePacket, error) {
 			IsShortPacket: true,
 			ShortBody:     shortBody,
 
-			RawPacket: rawPacketBuffer.Bytes(),
+			RawPacket: shortBody,
 		}
 
 		return v, nil
 	}
 
-	// too small
-	if int(length) < headerSize+0xd {
-		buffer.Next(int(length))
-		return nil, ErrTooShortPacket
-	}
-
-	if buffer.Len() < int(length) {
+	if len(b) < int(length) {
 		return nil, io.EOF
 	}
 
+	// too small
+	if int(length) < headerSize+0xd {
+		p.buffer.Next(int(length))
+		return nil, ErrTooShortPacket
+	}
+
 	body := b[:int(length)]
-	rawPacketBuffer.Write(body)
 
-	buffer.Next(int(length))
+	rawPacket := make([]byte, len(body))
+	copy(rawPacket, body)
 
-	body = body[headerSize:]
+	bodyBytes := body[headerSize:]
 
-	op := be.Uint32(body)
-	body = body[4:]
+	op := be.Uint32(bodyBytes)
+	bodyBytes = bodyBytes[4:]
 
-	id := be.Uint64(body)
-	body = body[8:]
+	id := be.Uint64(bodyBytes)
+	bodyBytes = bodyBytes[8:]
 
-	_, lenbytes := binary.Uvarint(body)
+	_, lenbytes := binary.Uvarint(bodyBytes)
 	if lenbytes <= 0 {
+		p.desyncByte()
 		err := fmt.Errorf("invalid message length %v", lenbytes)
 		return nil, err
 	}
 
-	if len(body) < lenbytes {
-		err := fmt.Errorf("invalid message length %v %v", len(body), lenbytes)
+	if len(bodyBytes) < lenbytes {
+		p.desyncByte()
+		err := fmt.Errorf("invalid message length %v %v", len(bodyBytes), lenbytes)
 		return nil, err
 	}
 
-	body = body[lenbytes:]
+	bodyBytes = bodyBytes[lenbytes:]
 
-	msg, err := NewMessage(bytes.NewReader(body))
+	msgReader := bytes.NewReader(bodyBytes)
+	msg, err := NewMessage(msgReader)
 	if err != nil {
+		p.desyncByte()
 		logger.Println("gameProxy packetHeader body read error", err)
 		return nil, err
 	}
 
-	p := &GamePacket{
-		At:     at,
+	// 訊息必須剛好填滿框架 (13,163 個實測框架 100% 符合),否則視為失步
+	if msgReader.Len() != 0 {
+		p.desyncByte()
+		err := fmt.Errorf("message does not fill frame, %v bytes left", msgReader.Len())
+		return nil, err
+	}
+
+	p.buffer.Next(int(length))
+
+	v := &GamePacket{
+		At:     p.at,
 		Sign:   sign,
 		Length: length,
 		Flag:   flag,
@@ -590,10 +849,121 @@ func gamePacketReader(buffer *bytes.Buffer, at time.Time) (*GamePacket, error) {
 		Id:  id,
 		Msg: msg,
 
-		RawPacket: rawPacketBuffer.Bytes(),
+		RawPacket: rawPacket,
 	}
 
-	return p, nil
+	return v, nil
+}
+
+// 在未同步的資料中搜尋框架邊界; 鎖定成功回傳 true
+func (p *streamParser) trySync() bool {
+	b := p.buffer.Bytes()
+
+	// 只掃描新進資料,收集看似合法的標頭候選
+	start := p.scanned - 5
+	if start < 0 {
+		start = 0
+	}
+
+	for o := start; o+6 <= len(b); o++ {
+		length := le.Uint32(b[o+1:])
+		flag := b[o+5]
+
+		if length >= 6 && length <= maxFrameLength && flag <= 4 {
+			p.cands = append(p.cands, o)
+		}
+	}
+	p.scanned = len(b)
+
+	// 由最低偏移開始驗證候選
+	for i := 0; i < len(p.cands); {
+		o := p.cands[i]
+		length := int(le.Uint32(b[o+1:]))
+		flag := b[o+5]
+		end := o + length
+
+		if end > len(b) {
+			// 框架還沒收齊,保留候選繼續等
+			i++
+			continue
+		}
+
+		ok := validateFrame(b[o:end])
+
+		if ok && (flag == 1 || flag == 2) {
+			// short packet 內容不透明,要求下一個標頭也合法才鎖定
+			if end+6 > len(b) {
+				i++
+				continue
+			}
+
+			nextLength := le.Uint32(b[end+1:])
+			nextFlag := b[end+5]
+			ok = nextLength >= 6 && nextLength <= maxFrameLength && nextFlag <= 4
+		}
+
+		if !ok {
+			p.cands = append(p.cands[:i], p.cands[i+1:]...)
+			continue
+		}
+
+		if o > 0 {
+			logger.Println("stream resynced, discarded", o, "bytes")
+		}
+
+		p.buffer.Next(o)
+		p.synced = true
+		p.resetScan()
+		return true
+	}
+
+	// 假候選可能宣告超大長度導致無限等待,限制未同步緩衝大小
+	if p.buffer.Len() > maxUnsyncedBuffer {
+		trim := p.buffer.Len() - unsyncedKeepBytes
+		p.buffer.Next(trim)
+
+		kept := p.cands[:0]
+		for _, o := range p.cands {
+			if o >= trim {
+				kept = append(kept, o-trim)
+			}
+		}
+		p.cands = kept
+		p.scanned -= trim
+	}
+
+	return false
+}
+
+// 驗證完整框架: 非 short packet 要求 op/id/uvarint/訊息剛好填滿框架
+func validateFrame(fb []byte) bool {
+	if len(fb) < 6 {
+		return false
+	}
+
+	flag := fb[5]
+
+	if flag == 1 || flag == 2 {
+		return true
+	}
+
+	if len(fb) < 6+0xd {
+		return false
+	}
+
+	body := fb[6+4+8:] // skip header, op, id
+
+	_, lenbytes := binary.Uvarint(body)
+	if lenbytes <= 0 || len(body) < lenbytes {
+		return false
+	}
+
+	r := bytes.NewReader(body[lenbytes:])
+	if _, err := NewMessage(r); err != nil {
+		return false
+	}
+
+	return r.Len() == 0
 }
 
 // op, id, msg, err

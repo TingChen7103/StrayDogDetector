@@ -18,6 +18,37 @@ type entityInfoExtend struct {
 	equipItemMap          map[uint32]*packet.EntityItem
 }
 
+// 部分解析的實體以快取內容補齊零值欄位,避免覆蓋掉先前已知的完整資訊
+// (解析中斷時 OwnerId/GuildName/裝備必為零值,直接覆蓋會使人偶傷害歸屬失效)
+func (t entityCache) mergeFromCache(p *packet.EntityInfo) {
+	e := t[p.Id]
+	if e == nil || e.EntityInfo == nil {
+		return
+	}
+
+	prev := e.EntityInfo
+
+	if p.OwnerId == 0 {
+		p.OwnerId = prev.OwnerId
+	}
+
+	if p.GuildName == "" {
+		p.GuildName = prev.GuildName
+	}
+
+	if p.Height == 0 && p.Weight == 0 {
+		p.Height, p.Weight, p.Upper, p.Lower = prev.Height, prev.Weight, prev.Upper, prev.Lower
+	}
+
+	if len(p.EquipItemMap) == 0 {
+		p.EquipItemMap = prev.EquipItemMap
+	}
+
+	if len(p.CharacterConditionMap) == 0 {
+		p.CharacterConditionMap = prev.CharacterConditionMap
+	}
+}
+
 func (t entityCache) add(p *packet.EntityInfo, at time.Time) {
 	if e, ok := t[p.Id]; ok {
 		e.EntityInfo = p

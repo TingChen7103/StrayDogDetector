@@ -21,6 +21,15 @@
                 style="max-width: 100px;"
             ></v-select>
 
+            <v-checkbox
+                v-model="saveRawData"
+                label="Log Raw Data"
+                density="compact"
+                hide-details
+                color="primary"
+                class="mr-2"
+            ></v-checkbox>
+
             <v-tooltip>
                 <template v-slot:activator="{ props }">
                     <v-btn @click="loadFromFile" v-bind="props" :loading="isLoading" color="primary" size="small"
@@ -100,6 +109,18 @@ export default defineComponent({
 
         const mabiConnected = ref(false);
         const isConnectingMabi = ref(false);
+        
+        const saveRawData = ref(false);
+        fetch('/api/settings').then(r => r.json()).then(data => {
+            if (data.SaveRawData === "true") saveRawData.value = true;
+        }).catch(() => {});
+
+        watch(saveRawData, (newVal) => {
+            fetch('/api/settings', {
+                method: 'POST',
+                body: JSON.stringify({ SaveRawData: newVal ? "true" : "false" })
+            }).catch(console.error);
+        });
 
         const checkMabiStatus = async () => {
             try {
@@ -116,6 +137,11 @@ export default defineComponent({
         const connectMabi = async () => {
             isConnectingMabi.value = true;
             try {
+                await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ SaveRawData: saveRawData.value ? "true" : "false" })
+                });
                 const res = await fetch('/api/mabinogi/connect', { method: 'POST' });
                 if (res.ok) {
                     const data = await res.json();
@@ -378,6 +404,7 @@ export default defineComponent({
             download,
             loadFromFile,
             loadFromServer,
+            saveRawData,
 
             tab,
             mabiConnected,

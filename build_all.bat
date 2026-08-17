@@ -9,6 +9,18 @@ set GO_MAIN_DIR=./cmd/dilmeterapi
 set OUTPUT_EXE=dilmeterapi.exe
 
 echo ==========================================
+echo [0/4] Checking for running instances...
+echo ==========================================
+:: 若 dilmeterapi.exe 正在執行,go build 將無法覆寫檔案而失敗 (磁碟上會留下舊版 exe)
+tasklist /FI "IMAGENAME eq dilmeterapi.exe" 2>nul | find /I "dilmeterapi.exe" >nul
+if %errorlevel% equ 0 (
+    echo [WARN] dilmeterapi.exe is running. Stopping it so the build can overwrite the file...
+    taskkill /F /IM dilmeterapi.exe >nul 2>&1
+    timeout /t 2 /nobreak >nul
+)
+
+echo.
+echo ==========================================
 echo [1/4] Checking Frontend Dependencies...
 echo ==========================================
 cd %FRONT_DIR%

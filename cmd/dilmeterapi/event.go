@@ -38,6 +38,7 @@ type eventEntityAppear struct {
 	Lower     float32
 	GuildName string
 	OwnerId   string
+	IsLocalPC bool
 }
 
 type eventEntityDisappear struct {

@@ -16,7 +16,7 @@ export class ActorManager {
     public damages: protocols.eventDamage[] = [];
 
     public static pcRaceSet = new Set<number>([8001, 8002, 9001, 9002, 10001, 10002]);
-    public static marionetteRaceSet = new Set<number>([990125, 990204, 990213]);
+    public static marionetteRaceSet = new Set<number>([990104, 990125, 990204, 990213]);
     public static marionetteSkillSet = new Set<number>([54151, 54152, 54153, 54154, 54155, 59167, 59168, 59169]);
 
     public onEvent(event: protocols.eventBase) {
@@ -51,6 +51,7 @@ export class ActorManager {
                             Lower: 1,
                             GuildName: "",
                             OwnerId: "",
+                            IsLocalPC: false,
                         });
                         attackerEntity = this.entityMap[event_.Id];
                     }
@@ -71,6 +72,7 @@ export class ActorManager {
                             Lower: 1,
                             GuildName: "",
                             OwnerId: "",
+                            IsLocalPC: false,
                         });
                         targetEntity = this.entityMap[event_.TargetId];
                     }
@@ -82,13 +84,21 @@ export class ActorManager {
                                         || ActorManager.marionetteSkillSet.has(event_.SkillId);
 
                     if (isMarionette) {
+                        // 後端已由封包延伸區塊解析出召喚者 (OwnerId);此處僅在缺漏時保守補救
                         let ownerId = attackerEntity?.ownerId;
 
                         if (!ownerId) {
-                            // 若登場未錄到 OwnerId，人偶技能自動重導向至目前 PC 玩家
-                            const pcEntity = Object.values(this.entityMap).find(e => e.isPC);
-                            if (pcEntity) {
-                                ownerId = pcEntity.id;
+                            // 1. Try to match by name (e.g. party member's marionette named after them)
+                            let matchingPC = Object.values(this.entityMap).find(e => e.isPC && attackerEntity?.name && e.name === attackerEntity.name);
+                            if (matchingPC) {
+                                ownerId = matchingPC.id;
+                            } else {
+                                // 2. Fallback to LocalPC (由後端 0x7530 判定) — 僅限場上只有一名 PC 時。
+                                //    隊伍中主人解析失敗的召喚物寧可不歸戶,也不可誤記給其他玩家
+                                const pcs = Object.values(this.entityMap).filter(e => e.isPC);
+                                if (pcs.length === 1) {
+                                    ownerId = pcs[0].id;
+                                }
                             }
                         }
 
@@ -178,8 +188,16 @@ export class ActorManager {
             // entity appear를 받은 뒤에 api가 켜진 경우
             for (const v of this.damages) {
                 if (v.Id == Id) {
-                    entity.onApplyDamage(v);
-                    entity.group.onApplyDamage(v);
+                    // 人偶的補償重播也要導向召喚者,不可記在人偶自己名下
+                    let creditTo = entity;
+                    const isMarionette = ActorManager.marionetteRaceSet.has(entity.raceId)
+                                        || ActorManager.marionetteSkillSet.has(v.SkillId);
+                    if (isMarionette && entity.ownerId && this.entityMap[entity.ownerId]) {
+                        creditTo = this.entityMap[entity.ownerId];
+                    }
+
+                    creditTo.onApplyDamage(v);
+                    creditTo.group.onApplyDamage(v);
                 }
                 else if (v.TargetId == Id) {
                     entity.onTakeDamage(v);
@@ -394,6 +412,12 @@ export class EntityActor extends BaseActor {
         return this._ownerId;
     }
 
+    protected _isLocalPC = false;
+    public get isLocalPC() {
+        this.vueUpdateTrack?.();
+        return this._isLocalPC;
+    }
+
     public get group() {
         this.vueUpdateTrack?.();
         return this._group;
@@ -432,6 +456,7 @@ export class EntityActor extends BaseActor {
         this._finisherId = '';
         this._guildName = event.GuildName;
         this._ownerId = event.OwnerId;
+        this._isLocalPC = event.IsLocalPC;
         this._body.Height = event.Height;
         this._body.Weight = event.Weight;
         this._body.Upper = event.Upper;

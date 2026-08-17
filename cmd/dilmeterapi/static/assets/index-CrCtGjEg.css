@@ -1952,6 +1952,11 @@ html.v-overlay-scroll-blocked {
 .v-select--active-menu .v-select__menu-icon {
   opacity: var(--v-high-emphasis-opacity);
   transform: rotate(180deg);
+}.v-checkbox.v-input {
+  flex: 0 1 auto;
+}
+.v-checkbox .v-selection-control {
+  min-height: var(--v-input-control-height);
 }.v-selection-control {
   align-items: center;
   contain: layout;

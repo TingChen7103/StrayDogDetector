@@ -14,9 +14,12 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gopacket/gopacket/pcap"
@@ -38,6 +41,7 @@ var packetLogFilename = ""
 var (
 	mabinogiConnected  = false
 	activePub          *eventPublisher
+	activeReader       *packet.GameServerPacketReader
 	activeCancel       context.CancelFunc
 	activeCtx          context.Context
 	activeCaptureMutex sync.Mutex
@@ -47,13 +51,14 @@ var (
 )
 
 func registerWsClient(ctx context.Context, ch chan<- iEvent) {
-	wsClientsMutex.Lock()
-	defer wsClientsMutex.Unlock()
-	wsClients[ch] = ctx
-
+	// 鎖序固定為 activeCaptureMutex -> wsClientsMutex (與 startCapture 相同),避免 ABBA 死鎖
 	activeCaptureMutex.Lock()
+	wsClientsMutex.Lock()
+	wsClients[ch] = ctx
 	pub := activePub
+	wsClientsMutex.Unlock()
 	activeCaptureMutex.Unlock()
+
 	if pub != nil {
 		go pub.addClient(ctx, ch)
 	}
@@ -66,11 +71,18 @@ func unregisterWsClient(ch chan<- iEvent) {
 }
 
 func startCapture(parentCtx context.Context, nicName string, fileName string) error {
+	// settingsMap 讀取須持 settingsMutex,且不可與 activeCaptureMutex 同時持有
+	settingsMutex.Lock()
+	saveRawData := settingsMap["SaveRawData"] == "true"
+	settingsMutex.Unlock()
+
 	activeCaptureMutex.Lock()
 	defer activeCaptureMutex.Unlock()
 
-	if mabinogiConnected && activePub != nil {
-		return nil
+	// 先關閉舊擷取器 (同步 Flush pcapng、觸發殘餘資料 drain),再取消 context
+	if activeReader != nil {
+		activeReader.Close()
+		activeReader = nil
 	}
 
 	if activeCancel != nil {
@@ -82,9 +94,10 @@ func startCapture(parentCtx context.Context, nicName string, fileName string) er
 	activeCancel = cancel
 
 	r, err := packet.NewGameServerPacketReader(&packet.GameServerPacketReaderOpt{
-		Ctx:      ctx,
-		NicName:  nicName,
-		FileName: fileName,
+		Ctx:         ctx,
+		NicName:     nicName,
+		FileName:    fileName,
+		SaveRawData: saveRawData,
 	})
 	if err != nil {
 		cancel()
@@ -96,12 +109,13 @@ func startCapture(parentCtx context.Context, nicName string, fileName string) er
 
 	pub := newEventPublisher(ctx, r)
 	activePub = pub
+	activeReader = r
 	mabinogiConnected = true
 
 	// packet writer (for debug)
 	go func() {
+		// 不可 close(ch): publisher 可能仍在送出,close 會造成 send-on-closed panic
 		ch := make(chan iEvent, 10000)
-		defer close(ch)
 
 		pub.addClient(ctx, ch)
 		if err := startPacketWriter(ctx, ch); err != nil {
@@ -121,6 +135,10 @@ func startCapture(parentCtx context.Context, nicName string, fileName string) er
 }
 
 func main() {
+	// 防禦性記憶體上限: 即使解析遇到異常資料,也不讓檢傷機
+	// 吃光系統記憶體而波及遊戲主程式 (soft limit,超過時 GC 積極回收)
+	debug.SetMemoryLimit(2 << 30)
+
 	// main ctx
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -233,9 +251,27 @@ func main() {
 		run(ctx, "", "")
 	}
 
-	for {
-		time.Sleep(1 * time.Second)
+	// 等待結束訊號 (Ctrl+C / 關閉視窗),確保 pcapng 正常 Flush/Close
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	sig := <-sigCh
+	logger.Println("shutting down:", sig)
+
+	activeCaptureMutex.Lock()
+	// 先 Close 讓 pcapng Flush 與殘餘資料 drain,稍候再取消 context
+	if activeReader != nil {
+		activeReader.Close()
+		activeReader = nil
 	}
+	activeCaptureMutex.Unlock()
+
+	time.Sleep(300 * time.Millisecond)
+
+	activeCaptureMutex.Lock()
+	if activeCancel != nil {
+		activeCancel()
+	}
+	activeCaptureMutex.Unlock()
 }
 
 func listenAvailablePort(preferredPort int) (net.Listener, int, error) {
@@ -268,9 +304,10 @@ func run(ctx context.Context, nicName string, fileName string) {
 		wsCtx, wsCtxCancel := context.WithCancel(ws.Request().Context())
 
 		// 생각보다 websocket이 send queue 비워지는게 느리다
-		ch := make(chan iEvent, 1000000)
+		// 不可 close(ch): publisher 可能仍在送出,close 會造成 send-on-closed panic
+		// 容量 65536 (~1MB/連線;實測戰鬥尖峰 457 事件/秒,可緩衝 2 分鐘以上)
+		ch := make(chan iEvent, 65536)
 		defer wsCtxCancel()
-		defer close(ch)
 
 		registerWsClient(wsCtx, ch)
 		defer unregisterWsClient(ch)
@@ -337,16 +374,6 @@ func httpHandlerMabinogiStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func httpHandlerMabinogiConnect(w http.ResponseWriter, r *http.Request) {
-	activeCaptureMutex.Lock()
-	connected := mabinogiConnected
-	activeCaptureMutex.Unlock()
-
-	if connected {
-		w.Header().Add("Content-Type", "application/json")
-		w.Write([]byte(`{"connected": true}`))
-		return
-	}
-
 	logger.Println("Manual connect requested. Scanning for active NIC...")
 	nicName, err := pcaputil.FindNic()
 	if err != nil {
@@ -493,7 +520,7 @@ func loadSettings() {
 		if len(parts) == 2 {
 			k := strings.TrimSpace(parts[0])
 			v := strings.TrimSpace(parts[1])
-			if k == "NIC" || k == "ActiveDpsBuffer" || k == "ChartWindowSize" {
+			if k == "NIC" || k == "ActiveDpsBuffer" || k == "ChartWindowSize" || k == "SaveRawData" {
 				settingsMap[k] = v
 			}
 		}
@@ -546,7 +573,7 @@ func httpHandlerSettings(w http.ResponseWriter, r *http.Request) {
 
 		settingsMutex.Lock()
 		for k, v := range req {
-			if k == "NIC" || k == "ActiveDpsBuffer" || k == "ChartWindowSize" {
+			if k == "NIC" || k == "ActiveDpsBuffer" || k == "ChartWindowSize" || k == "SaveRawData" {
 				settingsMap[k] = v
 			}
 		}
