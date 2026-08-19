@@ -33,6 +33,14 @@
             variant="outlined" density="compact" hide-details style="max-width: 150px; min-width: 100px;">
         </v-text-field>
         <v-switch v-model="showBuffCoverage" label="顯示 Buff 覆蓋率" color="primary" density="compact" hide-details class="ml-2"></v-switch>
+        <v-btn v-if="showBuffCoverage" :color="showRawBuffCoverage ? 'warning' : 'grey'"
+            :variant="showRawBuffCoverage ? 'flat' : 'outlined'" density="compact" class="ml-2"
+            @click="showRawBuffCoverage = !showRawBuffCoverage">
+            {{ showRawBuffCoverage ? '原始狀態 (未過濾)' : '白名單過濾中' }}
+            <v-tooltip activator="parent" location="bottom" max-width="360">
+                <span>白名單只顯示常用的 Buff。切到「原始狀態」可看到全部未過濾的條件，用來檢查有沒有漏掉該加進白名單的項目。白名單設定在 front/src/conditionWhitelist.ts。</span>
+            </v-tooltip>
+        </v-btn>
         <v-switch v-model="showDebuffCoverage" label="顯示 Debuff 覆蓋率" color="error" density="compact" hide-details class="ml-2"></v-switch>
         <v-btn v-if="allApplyDamage > 0" color="primary" variant="outlined" density="compact" class="ml-2" @click="syncChart">
             圖表同步
@@ -80,12 +88,12 @@
                                     <span class="ml-2 text-grey-darken-1">傷害佔比:</span> <span class="font-weight-bold">{{ (100 * damageBySkill / v.totalDamage).toFixed(1) }}%</span>
                                     <span class="ml-2 text-error font-weight-bold" v-if="!isExcludedSkill(+skillId)">暴擊率: {{ calculateSkillCriticalRate(v.groupedDamages[+skillId]) }}</span>
                                 </div>
-                                <div v-if="(showBuffCoverage || showDebuffCoverage) && getSkillConditionCoverage(v.groupedDamages[skillId], showBuffCoverage, showDebuffCoverage).length > 0" 
+                                <div v-if="(showBuffCoverage || showDebuffCoverage) && getSkillConditionCoverage(v.groupedDamages[skillId], showBuffCoverage, showDebuffCoverage, showRawBuffCoverage).length > 0"
                                     class="d-flex flex-wrap align-center mt-1" style="gap: 8px;">
-                                    <div v-for="c in getSkillConditionCoverage(v.groupedDamages[skillId], showBuffCoverage, showDebuffCoverage)" 
-                                        v-bind:key="c.ccId" class="d-flex align-center bg-grey-darken-4 px-1 rounded text-caption" style="gap: 4px; border: 1px solid #444;">
+                                    <div v-for="c in getSkillConditionCoverage(v.groupedDamages[skillId], showBuffCoverage, showDebuffCoverage, showRawBuffCoverage)"
+                                        v-bind:key="c.label || c.ccId" class="d-flex align-center bg-grey-darken-4 px-1 rounded text-caption" style="gap: 4px; border: 1px solid #444;">
                                         <img width="16" height="16" :src="`/res/characterconditionimage/${region}/${c.ccId}/${c.ccId}.png`" />
-                                        <span>{{ condNameMap[c.ccId] || `CC:${c.ccId}` }}: <b>{{ c.percentage.toFixed(1) }}%</b></span>
+                                        <span>{{ c.label || condNameMap[c.ccId] || `CC:${c.ccId}` }}: <b>{{ c.percentage.toFixed(1) }}%</b></span>
                                     </div>
                                 </div>
                             </v-sheet>
@@ -133,6 +141,13 @@ import highcharts, { Options, SeriesAreaOptions } from 'highcharts';
 import { getMabiNameColor } from '@/util';
 import { EntityDamage, ActorManager, BaseActor, GroupActor, EntityActor } from '@/eventActor';
 import { DamageCollectorBase, DualGroupedDamageCollector, GroupedDamageCollector } from '@/actionCollector';
+import {
+    isWhitelistedBuff,
+    statusSupportIds,
+    statusSupportMergeThreshold,
+    statusSupportDisplayId,
+    statusSupportDisplayName,
+} from '@/conditionWhitelist';
 
 import DamageList from '@/components/subComponents/damageList.vue';
 
@@ -416,19 +431,39 @@ export default defineComponent({
 
         const showBuffCoverage = ref(false);
         const showDebuffCoverage = ref(false);
+        // 顯示未經白名單過濾的原始狀態,用來檢查有沒有漏掉的條件
+        const showRawBuffCoverage = ref(false);
 
-        const getSkillConditionCoverage = (damages: EntityDamage[] | undefined, showBuff: boolean, showDebuff: boolean) => {
+        type ConditionCoverage = {
+            ccId: number;
+            percentage: number;
+            /** 合併項的顯示名稱;未設定時沿用 condNameMap */
+            label?: string;
+        };
+
+        const getSkillConditionCoverage = (
+            damages: EntityDamage[] | undefined,
+            showBuff: boolean,
+            showDebuff: boolean,
+            showRaw: boolean,
+        ): ConditionCoverage[] => {
             if (!damages || damages.length === 0 || (!showBuff && !showDebuff)) {
                 return [];
             }
 
             const ccCountMap: Record<number, number> = {};
             const total = damages.length;
+            // 狀態支援群組的聯集次數 (任一個在線就算),供合併列使用
+            let statusSupportCount = 0;
 
             for (const d of damages) {
                 const checkedCCs = new Set<number>();
                 if (showBuff && d.Conditions) {
                     for (const c of d.Conditions) {
+                        // Buff 側套用白名單;Debuff 側不受影響
+                        if (!showRaw && !isWhitelistedBuff(c.CCId, condNameMap.value[c.CCId])) {
+                            continue;
+                        }
                         checkedCCs.add(c.CCId);
                     }
                 }
@@ -440,16 +475,34 @@ export default defineComponent({
                 for (const ccId of checkedCCs) {
                     ccCountMap[ccId] = (ccCountMap[ccId] || 0) + 1;
                 }
+
+                if (!showRaw && statusSupportIds.some(id => checkedCCs.has(id))) {
+                    statusSupportCount++;
+                }
             }
 
-            return Object.entries(ccCountMap)
-                .map(([ccIdStr, count]) => {
-                    const ccId = +ccIdStr;
-                    return {
-                        ccId,
-                        percentage: (count / total) * 100,
-                    };
-                })
+            let entries: { ccId: number; count: number; label?: string }[] =
+                Object.entries(ccCountMap).map(([ccIdStr, count]) => ({ ccId: +ccIdStr, count }));
+
+            if (!showRaw) {
+                // 銳利/再生/迅速/逆轉 同時出現 3 個以上時合併成一列「狀態支援」
+                const presentCount = statusSupportIds.filter(id => ccCountMap[id] !== undefined).length;
+                if (presentCount >= statusSupportMergeThreshold) {
+                    entries = entries.filter(e => !statusSupportIds.includes(e.ccId));
+                    entries.push({
+                        ccId: statusSupportDisplayId,
+                        count: statusSupportCount,
+                        label: statusSupportDisplayName,
+                    });
+                }
+            }
+
+            return entries
+                .map(e => ({
+                    ccId: e.ccId,
+                    percentage: (e.count / total) * 100,
+                    label: e.label,
+                }))
                 .sort((a, b) => b.percentage - a.percentage);
         };
 
@@ -499,20 +552,48 @@ export default defineComponent({
                     chart.destroy();
                     chart = undefined!;
                 }
+                // 戰鬥起始的絕對時間 (unix 秒),用來把相對時間換算成使用者系統時間
+                const combatStart = combatTimeRange.value.start;
+
                 const dynamicChartOpt: Options = {
                     ...chartOpt,
-                    yAxis: { 
-                        title: { text: `${chartWindowSize.value}秒 DPS` } 
+                    xAxis: [
+                        {
+                            // 下方: 相對時間 (維持原本行為)
+                            type: 'datetime',
+                            labels: {
+                                formatter: function (this: any) {
+                                    return formatRelTime(this.value);
+                                }
+                            }
+                        },
+                        {
+                            // 上方: 使用者系統時間,與下方軸共用刻度並排顯示
+                            type: 'datetime',
+                            linkedTo: 0,
+                            opposite: true,
+                            title: { text: '系統時間' },
+                            labels: {
+                                formatter: function (this: any) {
+                                    return formatClockTime(this.value, combatStart);
+                                }
+                            }
+                        },
+                    ],
+                    yAxis: {
+                        title: { text: `${chartWindowSize.value}秒 DPS` }
                     },
                     tooltip: {
                         valueDecimals: 0,
                         shared: true,
                         formatter: function (this: any) {
-                            const sec = Math.floor(this.x / 1000);
-                            const m = Math.floor(sec / 60);
-                            const s = sec % 60;
-                            const timeStr = `${m}:${s < 10 ? '0' : ''}${s}`;
-                            let tooltipText = `<b>相對時間: ${timeStr} (${chartWindowSize.value}秒 DPS)</b><br/>`;
+                            const timeStr = formatRelTime(this.x);
+                            const clockStr = formatClockTime(this.x, combatStart);
+                            let tooltipText = `<b>相對時間: ${timeStr}`;
+                            if (clockStr) {
+                                tooltipText += `　系統時間: ${clockStr}`;
+                            }
+                            tooltipText += ` (${chartWindowSize.value}秒 DPS)</b><br/>`;
                             this.points.forEach((point: any) => {
                                 tooltipText += `<span style="color:${point.color}">\u25CF</span> ${point.series.name}: <b>${point.y.toLocaleString()}</b><br/>`;
                             });
@@ -633,6 +714,7 @@ export default defineComponent({
             calculateCriticalRate,
             showBuffCoverage,
             showDebuffCoverage,
+            showRawBuffCoverage,
             getSkillConditionCoverage,
             condNameMap,
             detailDialog,
@@ -666,6 +748,29 @@ type EntityExtended = {
     groupedCount: Record<string, number>,
 };
 
+/** 相對時間 (圖表 X 軸的毫秒) -> M:SS */
+const formatRelTime = (relMs: number): string => {
+    const sec = Math.floor(relMs / 1000);
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}:${s < 10 ? '0' : ''}${s}`;
+};
+
+/**
+ * 相對時間 -> 使用者系統時間 HH:MM:SS
+ * startSec 為戰鬥起始的 unix 秒;Date 以瀏覽器本機時區呈現,即使用者的系統時間。
+ */
+const formatClockTime = (relMs: number, startSec: number): string => {
+    if (!startSec) {
+        return '';
+    }
+
+    const d = new Date((startSec * 1000) + relMs);
+    const pad = (n: number) => (n < 10 ? '0' : '') + n;
+
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+};
+
 const chartOpt: Options = {
     lang: {
         locale: 'en',
@@ -680,14 +785,13 @@ const chartOpt: Options = {
             animation: false, // 關閉數據線條/面積動畫，避免大數據時背景渲染卡頓
         },
     },
-    xAxis: { 
+    // 註: syncChart 會以 dynamicChartOpt 覆寫 xAxis / tooltip (加上系統時間軸),
+    //     這裡的設定僅作為基底預設值
+    xAxis: {
         type: 'datetime',
         labels: {
             formatter: function (this: any) {
-                const sec = Math.floor(this.value / 1000);
-                const m = Math.floor(sec / 60);
-                const s = sec % 60;
-                return `${m}:${s < 10 ? '0' : ''}${s}`;
+                return formatRelTime(this.value);
             }
         }
     },
@@ -696,10 +800,7 @@ const chartOpt: Options = {
         valueDecimals: 0,
         shared: true,
         formatter: function (this: any) {
-            const sec = Math.floor(this.x / 1000);
-            const m = Math.floor(sec / 60);
-            const s = sec % 60;
-            const timeStr = `${m}:${s < 10 ? '0' : ''}${s}`;
+            const timeStr = formatRelTime(this.x);
             let tooltipText = `<b>相對時間: ${timeStr} (5秒移動平均)</b><br/>`;
             this.points.forEach((point: any) => {
                 tooltipText += `<span style="color:${point.color}">\u25CF</span> ${point.series.name}: <b>${point.y.toLocaleString()}</b><br/>`;
