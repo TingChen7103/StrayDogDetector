@@ -41,7 +41,11 @@
                 <span>白名單只顯示常用的 Buff。切到「原始狀態」可看到全部未過濾的條件，用來檢查有沒有漏掉該加進白名單的項目。白名單設定在 front/src/conditionWhitelist.ts。</span>
             </v-tooltip>
         </v-btn>
-        <v-switch v-model="showDebuffCoverage" label="顯示 Debuff 覆蓋率" color="error" density="compact" hide-details class="ml-2"></v-switch>
+        <v-switch v-model="showDebuffCoverage" label="顯示完整Debuff覆蓋率" color="error" density="compact" hide-details class="ml-2">
+            <v-tooltip activator="parent" location="bottom" max-width="360">
+                <span>預設只顯示白名單 Debuff 的圖示與覆蓋率。開啟後會顯示名稱與 CCId，並把白名單外的所有 Debuff 接在後面，用來檢查有沒有漏掉該加進白名單的項目。白名單設定在 front/src/conditionWhitelist.ts。</span>
+            </v-tooltip>
+        </v-switch>
         <v-btn v-if="allApplyDamage > 0" color="primary" variant="outlined" density="compact" class="ml-2" @click="syncChart">
             圖表同步
         </v-btn>
@@ -49,6 +53,36 @@
             攻略總時間: <span class="text-primary">{{ currentTargetDuration }}</span>
         </span>
     </div>
+
+    <!-- Debuff 覆蓋率:選定敵人後自動顯示,不跟著技能列 -->
+    <v-sheet v-if="targetId" class="mx-2 mb-2 px-3 py-2 rounded" color="grey-darken-4" border>
+        <div class="d-flex align-center flex-wrap" style="gap: 10px;">
+            <span class="text-caption font-weight-bold text-error" style="white-space: nowrap;">
+                Debuff 覆蓋率
+            </span>
+            <span class="text-caption text-grey" style="white-space: nowrap;">
+                {{ prettyEntityName(entityMap[targetId]?.actor) }}
+            </span>
+
+            <template v-if="debuffCoverage.length > 0">
+                <div v-for="c in debuffCoverage" v-bind:key="c.ccId"
+                    class="d-flex align-center bg-grey-darken-3 px-1 rounded text-caption"
+                    :style="`gap: 4px; border: 1px solid ${isWhitelistedDebuff(c.ccId) ? '#a33' : '#444'};`
+                        + (c.percentage === 0 ? ' opacity: 0.4;' : '')">
+                    <img width="16" height="16" :src="`/res/characterconditionimage/${region}/${c.ccId}/${c.ccId}.png`"
+                        :style="c.percentage === 0 ? 'filter: grayscale(1);' : ''" />
+                    <span v-if="showDebuffCoverage" class="text-grey-lighten-1">
+                        {{ condNameMap[c.ccId] || `CC:${c.ccId}` }}:
+                    </span>
+                    <b :class="c.percentage === 0 ? 'text-grey' : ''">{{ c.percentage.toFixed(1) }}%</b>
+                    <v-tooltip v-if="!showDebuffCoverage" activator="parent" location="bottom">
+                        <span>{{ condNameMap[c.ccId] || `CC:${c.ccId}` }}{{ c.percentage === 0 ? '（此敵人未使用）' : '' }}</span>
+                    </v-tooltip>
+                </div>
+            </template>
+            <span v-else class="text-caption text-grey-darken-1">（此敵人無符合的 Debuff 紀錄）</span>
+        </div>
+    </v-sheet>
 
     <v-expansion-panels multiple v-for="v in pcEntities" v-bind:key="v.actor.id">
         <template v-if="v.totalDamage > 0">
@@ -88,12 +122,27 @@
                                     <span class="ml-2 text-grey-darken-1">傷害佔比:</span> <span class="font-weight-bold">{{ (100 * damageBySkill / v.totalDamage).toFixed(1) }}%</span>
                                     <span class="ml-2 text-error font-weight-bold" v-if="!isExcludedSkill(+skillId)">暴擊率: {{ calculateSkillCriticalRate(v.groupedDamages[+skillId]) }}</span>
                                 </div>
-                                <div v-if="(showBuffCoverage || showDebuffCoverage) && getSkillConditionCoverage(v.groupedDamages[skillId], showBuffCoverage, showDebuffCoverage, showRawBuffCoverage).length > 0"
+                                <div v-if="showBuffCoverage && getSkillConditionCoverage(v.groupedDamages[skillId], showBuffCoverage, showRawBuffCoverage).length > 0"
                                     class="d-flex flex-wrap align-center mt-1" style="gap: 8px;">
-                                    <div v-for="c in getSkillConditionCoverage(v.groupedDamages[skillId], showBuffCoverage, showDebuffCoverage, showRawBuffCoverage)"
+                                    <div v-for="c in getSkillConditionCoverage(v.groupedDamages[skillId], showBuffCoverage, showRawBuffCoverage)"
                                         v-bind:key="c.label || c.ccId" class="d-flex align-center bg-grey-darken-4 px-1 rounded text-caption" style="gap: 4px; border: 1px solid #444;">
                                         <img width="16" height="16" :src="`/res/characterconditionimage/${region}/${c.ccId}/${c.ccId}.png`" />
                                         <span>{{ c.label || condNameMap[c.ccId] || `CC:${c.ccId}` }}: <b>{{ c.percentage.toFixed(1) }}%</b></span>
+
+                                        <!-- 音樂 buff: 顯示該次施放的實際加成數值與其佔生效期間的比例 -->
+                                        <v-tooltip v-if="hasMusicBuffDisplay(c.ccId)" activator="parent" location="bottom" max-width="420">
+                                            <div class="text-caption font-weight-bold mb-1">
+                                                {{ condNameMap[c.ccId] || `CC:${c.ccId}` }} — 生效期間的加成數值
+                                            </div>
+                                            <div v-for="b in computeMusicBuffBreakdown(v.groupedDamages[skillId], c.ccId)"
+                                                v-bind:key="b.text" class="d-flex justify-space-between" style="gap: 12px;">
+                                                <span>{{ b.text }}</span>
+                                                <b>{{ b.percentage.toFixed(1) }}%</b>
+                                            </div>
+                                            <div class="text-caption text-grey mt-1">
+                                                此處百分比相加為 100%（分母為該 buff 生效的傷害次數）
+                                            </div>
+                                        </v-tooltip>
                                     </div>
                                 </div>
                             </v-sheet>
@@ -147,6 +196,11 @@ import {
     statusSupportMergeThreshold,
     statusSupportDisplayId,
     statusSupportDisplayName,
+    isWhitelistedDebuff,
+    computeDebuffCoverage,
+    DebuffCoverageEntry,
+    hasMusicBuffDisplay,
+    computeMusicBuffBreakdown,
 } from '@/conditionWhitelist';
 
 import DamageList from '@/components/subComponents/damageList.vue';
@@ -441,13 +495,13 @@ export default defineComponent({
             label?: string;
         };
 
+        // 技能列只顯示 Buff 覆蓋率;Debuff 已改由下方獨立區域統一顯示
         const getSkillConditionCoverage = (
             damages: EntityDamage[] | undefined,
             showBuff: boolean,
-            showDebuff: boolean,
             showRaw: boolean,
         ): ConditionCoverage[] => {
-            if (!damages || damages.length === 0 || (!showBuff && !showDebuff)) {
+            if (!damages || damages.length === 0 || !showBuff) {
                 return [];
             }
 
@@ -460,15 +514,9 @@ export default defineComponent({
                 const checkedCCs = new Set<number>();
                 if (showBuff && d.Conditions) {
                     for (const c of d.Conditions) {
-                        // Buff 側套用白名單;Debuff 側不受影響
                         if (!showRaw && !isWhitelistedBuff(c.CCId, condNameMap.value[c.CCId])) {
                             continue;
                         }
-                        checkedCCs.add(c.CCId);
-                    }
-                }
-                if (showDebuff && d.TargetConditions) {
-                    for (const c of d.TargetConditions) {
                         checkedCCs.add(c.CCId);
                     }
                 }
@@ -505,6 +553,27 @@ export default defineComponent({
                 }))
                 .sort((a, b) => b.percentage - a.percentage);
         };
+
+        /**
+         * 選定敵人的 Debuff 覆蓋率。
+         *
+         * 基準與 Buff 覆蓋率一致:對該敵人的所有傷害事件中,
+         * 有幾成發生的當下該 debuff 掛在牠身上。
+         * 白名單的合併組 (912/913、504/392) 以聯集計算 —— 任一個在身上就算。
+         * 白名單項目依 conditionWhitelist 的順序排在前面;
+         * 開啟「顯示完整Debuff覆蓋率」時,白名單外的項目依覆蓋率高低接在後面。
+         */
+        const debuffCoverage = computed((): DebuffCoverageEntry[] => {
+            if (!targetId.value) {
+                // 未指定特定敵人時不顯示 (多隻敵人混在一起數字沒有意義)
+                return [];
+            }
+
+            return computeDebuffCoverage(
+                targetDC.value.groupedDamages[targetId.value] || [],
+                showDebuffCoverage.value,
+            );
+        });
 
         const targetIdList = computed(() => {
             const list = Object.entries(targetDC.value.groupedTotalDamages)
@@ -716,6 +785,10 @@ export default defineComponent({
             showDebuffCoverage,
             showRawBuffCoverage,
             getSkillConditionCoverage,
+            debuffCoverage,
+            isWhitelistedDebuff,
+            hasMusicBuffDisplay,
+            computeMusicBuffBreakdown,
             condNameMap,
             detailDialog,
             detailDialogData,

@@ -7488,7 +7488,8 @@ class EntityActor extends BaseActor {
       At: event.At,
       CCId: event.CCId,
       DisableAt: event.DisableAt,
-      AttackerId: event.AttackerId
+      AttackerId: event.AttackerId,
+      Params: event.Params
     };
     const prev = this._conditionHistory.length ? this._conditionHistory[this._conditionHistory.length - 1].List : [];
     const current = Object.values(this._conditionMap).sort((a, b) => a.CCId - b.CCId);
@@ -20713,6 +20714,154 @@ function isWhitelistedBuff(ccId, condName) {
   }
   return ccId >= magicCircleIdFloor;
 }
+const debuffWhitelistGroups = [
+  [1164],
+  // 減少防禦/保護
+  [1165],
+  // 減少魔法防禦/魔法保護
+  [1166],
+  // 所受傷害增加
+  [1093],
+  // 保護最大減少
+  [1094],
+  // 魔法保護最大減少
+  [912, 913],
+  // 喵喵的喵皇降臨 (兩者本質相同,合併)
+  [504, 392],
+  // 雷電交加 / 纏繞的閃電 (兩者本質相同,合併)
+  [1138],
+  // 幸運草標記
+  [598],
+  // 跑跑卡丁車水球
+  [1026],
+  // 倒吊人
+  [803],
+  // 崩壞的波動
+  [10001],
+  // 物理防禦和保護減少瑪奇魔法陣
+  [10002],
+  // 魔法防禦和保護減少瑪奇魔法陣
+  [464],
+  // 冰雪狀態
+  [1004]
+  // 銳利目光
+];
+const debuffWhitelistIds = new Set(debuffWhitelistGroups.flat());
+const debuffRepresentativeMap = new Map(
+  debuffWhitelistGroups.flatMap((group) => group.map((id) => [id, group[0]]))
+);
+function debuffRepresentativeId(ccId) {
+  return debuffRepresentativeMap.get(ccId) ?? ccId;
+}
+function debuffWhitelistRank(ccId) {
+  return debuffWhitelistGroups.findIndex((group) => group.includes(ccId));
+}
+function isWhitelistedDebuff(ccId) {
+  return debuffWhitelistIds.has(ccId);
+}
+function computeDebuffCoverage(damages, showAll) {
+  if (damages.length === 0) {
+    return [];
+  }
+  const total = damages.length;
+  const countMap = {};
+  for (const group of debuffWhitelistGroups) {
+    countMap[group[0]] = 0;
+  }
+  for (const d of damages) {
+    if (!d.TargetConditions) {
+      continue;
+    }
+    const seen2 = /* @__PURE__ */ new Set();
+    for (const c of d.TargetConditions) {
+      if (!showAll && !isWhitelistedDebuff(c.CCId)) {
+        continue;
+      }
+      seen2.add(debuffRepresentativeId(c.CCId));
+    }
+    for (const ccId of seen2) {
+      countMap[ccId] = (countMap[ccId] || 0) + 1;
+    }
+  }
+  return Object.entries(countMap).map(([ccIdStr, count]) => ({
+    ccId: +ccIdStr,
+    percentage: count / total * 100
+  })).sort((a, b) => {
+    const ra = debuffWhitelistRank(a.ccId);
+    const rb = debuffWhitelistRank(b.ccId);
+    if (ra >= 0 && rb >= 0) return ra - rb;
+    if (ra >= 0) return -1;
+    if (rb >= 0) return 1;
+    return b.percentage - a.percentage;
+  });
+}
+const musicBuffDisplay = {
+  680: [
+    // 最小攻擊力(MCMBAMIN)實測恆等於最大,只顯示最大
+    { key: "MCMBAMAX", label: "最大攻擊力", kind: "percent" }
+  ],
+  192: [
+    // LSMA 同時是「魔法攻擊力」與「鍊金術傷害」(封包只有一個欄位),合併顯示
+    { key: "LSMA", label: "魔法/煉金傷", kind: "percent" },
+    { key: "MFCP", label: "施展魔法速度", kind: "percent" }
+  ],
+  193: [
+    { key: "SPDPC", label: "移動速度", kind: "multiplier" }
+  ]
+};
+function hasMusicBuffDisplay(ccId) {
+  return musicBuffDisplay[ccId] !== void 0;
+}
+function parseConditionParams(params) {
+  const out = {};
+  for (const part of params.split(";")) {
+    const seg = part.split(":");
+    if (seg.length !== 3 || seg[1] !== "f") {
+      continue;
+    }
+    const v = parseFloat(seg[2]);
+    if (!isNaN(v)) {
+      out[seg[0]] = v;
+    }
+  }
+  return out;
+}
+function formatFieldValue(field, raw) {
+  const pct = field.kind === "multiplier" ? (raw - 1) * 100 : raw;
+  return `${field.label} ${pct.toFixed(2)}%`;
+}
+function formatMusicBuffParams(ccId, params) {
+  const fields = musicBuffDisplay[ccId];
+  if (!fields || !params) {
+    return "";
+  }
+  const kv = parseConditionParams(params);
+  return fields.filter((f) => kv[f.key] !== void 0).map((f) => formatFieldValue(f, kv[f.key])).join("　");
+}
+function computeMusicBuffBreakdown(damages, ccId) {
+  var _a;
+  if (!hasMusicBuffDisplay(ccId)) {
+    return [];
+  }
+  let activeCount = 0;
+  const counts = {};
+  for (const d of damages) {
+    const cond = (_a = d.Conditions) == null ? void 0 : _a.find((c) => c.CCId === ccId);
+    if (!cond) {
+      continue;
+    }
+    activeCount++;
+    const text = formatMusicBuffParams(ccId, cond.Params) || "(無數值資料)";
+    counts[text] = (counts[text] || 0) + 1;
+  }
+  if (activeCount === 0) {
+    return [];
+  }
+  return Object.entries(counts).map(([text, count]) => ({
+    text,
+    percentage: count / activeCount * 100
+  })).sort((a, b) => b.percentage - a.percentage);
+}
 const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
   components: {
     DamageList
@@ -20944,8 +21093,8 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
     const showBuffCoverage = ref(false);
     const showDebuffCoverage = ref(false);
     const showRawBuffCoverage = ref(false);
-    const getSkillConditionCoverage = (damages, showBuff, showDebuff, showRaw) => {
-      if (!damages || damages.length === 0 || !showBuff && !showDebuff) {
+    const getSkillConditionCoverage = (damages, showBuff, showRaw) => {
+      if (!damages || damages.length === 0 || !showBuff) {
         return [];
       }
       const ccCountMap = {};
@@ -20958,11 +21107,6 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
             if (!showRaw && !isWhitelistedBuff(c.CCId, condNameMap2.value[c.CCId])) {
               continue;
             }
-            checkedCCs.add(c.CCId);
-          }
-        }
-        if (showDebuff && d.TargetConditions) {
-          for (const c of d.TargetConditions) {
             checkedCCs.add(c.CCId);
           }
         }
@@ -20991,6 +21135,15 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
         label: e.label
       })).sort((a, b) => b.percentage - a.percentage);
     };
+    const debuffCoverage = computed(() => {
+      if (!targetId.value) {
+        return [];
+      }
+      return computeDebuffCoverage(
+        targetDC.value.groupedDamages[targetId.value] || [],
+        showDebuffCoverage.value
+      );
+    });
     const targetIdList = computed(() => {
       const list = Object.entries(targetDC.value.groupedTotalDamages).sort(([, av], [, bv]) => bv - av);
       list.unshift(["", targetDC.value.totalDamage]);
@@ -21161,6 +21314,10 @@ const _sfc_main$2 = /* @__PURE__ */ defineComponent$1({
       showDebuffCoverage,
       showRawBuffCoverage,
       getSkillConditionCoverage,
+      debuffCoverage,
+      isWhitelistedDebuff,
+      hasMusicBuffDisplay,
+      computeMusicBuffBreakdown,
       condNameMap: condNameMap2,
       detailDialog,
       detailDialogData,
@@ -25865,36 +26022,60 @@ const _hoisted_2$1 = {
 const _hoisted_3$1 = { class: "d-flex ma-2 ga-2 align-center flex-wrap" };
 const _hoisted_4$1 = /* @__PURE__ */ createBaseVNode("span", null, "活躍DPS僅計算傷害大於0的時段。若相鄰兩次攻擊間隔小於或等於緩衝時間（B 秒），會合併計算為同一次活躍攻擊區間。活躍區間僅向後延伸緩衝時間，且不超過對該敵人的最後一次攻擊時間。單次獨立攻擊的最少活躍時間為 1 秒。", -1);
 const _hoisted_5$1 = /* @__PURE__ */ createBaseVNode("span", null, "白名單只顯示常用的 Buff。切到「原始狀態」可看到全部未過濾的條件，用來檢查有沒有漏掉該加進白名單的項目。白名單設定在 front/src/conditionWhitelist.ts。", -1);
-const _hoisted_6$1 = {
+const _hoisted_6$1 = /* @__PURE__ */ createBaseVNode("span", null, "預設只顯示白名單 Debuff 的圖示與覆蓋率。開啟後會顯示名稱與 CCId，並把白名單外的所有 Debuff 接在後面，用來檢查有沒有漏掉該加進白名單的項目。白名單設定在 front/src/conditionWhitelist.ts。", -1);
+const _hoisted_7 = {
   key: 2,
   class: "ml-2 font-weight-bold text-subtitle-2 text-grey-darken-3"
 };
-const _hoisted_7 = { class: "text-primary" };
-const _hoisted_8 = { class: "font-weight-bold" };
-const _hoisted_9 = { class: "text-grey" };
-const _hoisted_10 = { class: "text-primary font-weight-bold" };
-const _hoisted_11 = { class: "text-deep-orange font-weight-bold" };
+const _hoisted_8 = { class: "text-primary" };
+const _hoisted_9 = {
+  class: "d-flex align-center flex-wrap",
+  style: { "gap": "10px" }
+};
+const _hoisted_10 = /* @__PURE__ */ createBaseVNode("span", {
+  class: "text-caption font-weight-bold text-error",
+  style: { "white-space": "nowrap" }
+}, " Debuff 覆蓋率 ", -1);
+const _hoisted_11 = {
+  class: "text-caption text-grey",
+  style: { "white-space": "nowrap" }
+};
 const _hoisted_12 = ["src"];
-const _hoisted_13 = { class: "font-weight-bold" };
-const _hoisted_14 = /* @__PURE__ */ createBaseVNode("span", { class: "ml-2 text-grey-darken-1" }, "damage:", -1);
+const _hoisted_13 = {
+  key: 0,
+  class: "text-grey-lighten-1"
+};
+const _hoisted_14 = {
+  key: 1,
+  class: "text-caption text-grey-darken-1"
+};
 const _hoisted_15 = { class: "font-weight-bold" };
-const _hoisted_16 = /* @__PURE__ */ createBaseVNode("span", { class: "ml-2 text-grey-darken-1" }, "count:", -1);
-const _hoisted_17 = { class: "font-weight-bold" };
-const _hoisted_18 = { class: "ml-2 text-orange-darken-2" };
-const _hoisted_19 = { class: "ml-2 text-grey-darken-1" };
-const _hoisted_20 = { class: "ml-2 text-blue-darken-1" };
-const _hoisted_21 = /* @__PURE__ */ createBaseVNode("span", { class: "ml-2 text-grey-darken-1" }, "傷害佔比:", -1);
+const _hoisted_16 = { class: "text-grey" };
+const _hoisted_17 = { class: "text-primary font-weight-bold" };
+const _hoisted_18 = { class: "text-deep-orange font-weight-bold" };
+const _hoisted_19 = ["src"];
+const _hoisted_20 = { class: "font-weight-bold" };
+const _hoisted_21 = /* @__PURE__ */ createBaseVNode("span", { class: "ml-2 text-grey-darken-1" }, "damage:", -1);
 const _hoisted_22 = { class: "font-weight-bold" };
-const _hoisted_23 = {
+const _hoisted_23 = /* @__PURE__ */ createBaseVNode("span", { class: "ml-2 text-grey-darken-1" }, "count:", -1);
+const _hoisted_24 = { class: "font-weight-bold" };
+const _hoisted_25 = { class: "ml-2 text-orange-darken-2" };
+const _hoisted_26 = { class: "ml-2 text-grey-darken-1" };
+const _hoisted_27 = { class: "ml-2 text-blue-darken-1" };
+const _hoisted_28 = /* @__PURE__ */ createBaseVNode("span", { class: "ml-2 text-grey-darken-1" }, "傷害佔比:", -1);
+const _hoisted_29 = { class: "font-weight-bold" };
+const _hoisted_30 = {
   key: 0,
   class: "ml-2 text-error font-weight-bold"
 };
-const _hoisted_24 = {
+const _hoisted_31 = {
   key: 0,
   class: "d-flex flex-wrap align-center mt-1",
   style: { "gap": "8px" }
 };
-const _hoisted_25 = ["src"];
+const _hoisted_32 = ["src"];
+const _hoisted_33 = { class: "text-caption font-weight-bold mb-1" };
+const _hoisted_34 = /* @__PURE__ */ createBaseVNode("div", { class: "text-caption text-grey mt-1" }, " 此處百分比相加為 100%（分母為該 buff 生效的傷害次數） ", -1);
 function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
   const _component_damage_list = resolveComponent("damage-list");
   return openBlock(), createElementBlock(Fragment, null, [
@@ -26017,12 +26198,26 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
       createVNode(VSwitch, {
         modelValue: _ctx.showDebuffCoverage,
         "onUpdate:modelValue": _cache[5] || (_cache[5] = ($event) => _ctx.showDebuffCoverage = $event),
-        label: "顯示 Debuff 覆蓋率",
+        label: "顯示完整Debuff覆蓋率",
         color: "error",
         density: "compact",
         "hide-details": "",
         class: "ml-2"
-      }, null, 8, ["modelValue"]),
+      }, {
+        default: withCtx(() => [
+          createVNode(VTooltip, {
+            activator: "parent",
+            location: "bottom",
+            "max-width": "360"
+          }, {
+            default: withCtx(() => [
+              _hoisted_6$1
+            ]),
+            _: 1
+          })
+        ]),
+        _: 1
+      }, 8, ["modelValue"]),
       _ctx.allApplyDamage > 0 ? (openBlock(), createBlock(VBtn, {
         key: 1,
         color: "primary",
@@ -26036,11 +26231,56 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
         ]),
         _: 1
       }, 8, ["onClick"])) : createCommentVNode("", true),
-      _ctx.allApplyDamage > 0 ? (openBlock(), createElementBlock("span", _hoisted_6$1, [
+      _ctx.allApplyDamage > 0 ? (openBlock(), createElementBlock("span", _hoisted_7, [
         createTextVNode(" 攻略總時間: "),
-        createBaseVNode("span", _hoisted_7, toDisplayString(_ctx.currentTargetDuration), 1)
+        createBaseVNode("span", _hoisted_8, toDisplayString(_ctx.currentTargetDuration), 1)
       ])) : createCommentVNode("", true)
     ]),
+    _ctx.targetId ? (openBlock(), createBlock(VSheet, {
+      key: 0,
+      class: "mx-2 mb-2 px-3 py-2 rounded",
+      color: "grey-darken-4",
+      border: ""
+    }, {
+      default: withCtx(() => {
+        var _a;
+        return [
+          createBaseVNode("div", _hoisted_9, [
+            _hoisted_10,
+            createBaseVNode("span", _hoisted_11, toDisplayString(_ctx.prettyEntityName((_a = _ctx.entityMap[_ctx.targetId]) == null ? void 0 : _a.actor)), 1),
+            _ctx.debuffCoverage.length > 0 ? (openBlock(true), createElementBlock(Fragment, { key: 0 }, renderList(_ctx.debuffCoverage, (c) => {
+              return openBlock(), createElementBlock("div", {
+                key: c.ccId,
+                class: "d-flex align-center bg-grey-darken-3 px-1 rounded text-caption",
+                style: normalizeStyle(`gap: 4px; border: 1px solid ${_ctx.isWhitelistedDebuff(c.ccId) ? "#a33" : "#444"};` + (c.percentage === 0 ? " opacity: 0.4;" : ""))
+              }, [
+                createBaseVNode("img", {
+                  width: "16",
+                  height: "16",
+                  src: `/res/characterconditionimage/${_ctx.region}/${c.ccId}/${c.ccId}.png`,
+                  style: normalizeStyle(c.percentage === 0 ? "filter: grayscale(1);" : "")
+                }, null, 12, _hoisted_12),
+                _ctx.showDebuffCoverage ? (openBlock(), createElementBlock("span", _hoisted_13, toDisplayString(_ctx.condNameMap[c.ccId] || `CC:${c.ccId}`) + ": ", 1)) : createCommentVNode("", true),
+                createBaseVNode("b", {
+                  class: normalizeClass(c.percentage === 0 ? "text-grey" : "")
+                }, toDisplayString(c.percentage.toFixed(1)) + "%", 3),
+                !_ctx.showDebuffCoverage ? (openBlock(), createBlock(VTooltip, {
+                  key: 1,
+                  activator: "parent",
+                  location: "bottom"
+                }, {
+                  default: withCtx(() => [
+                    createBaseVNode("span", null, toDisplayString(_ctx.condNameMap[c.ccId] || `CC:${c.ccId}`) + toDisplayString(c.percentage === 0 ? "（此敵人未使用）" : ""), 1)
+                  ]),
+                  _: 2
+                }, 1024)) : createCommentVNode("", true)
+              ], 4);
+            }), 128)) : (openBlock(), createElementBlock("span", _hoisted_14, "（此敵人無符合的 Debuff 紀錄）"))
+          ])
+        ];
+      }),
+      _: 1
+    })) : createCommentVNode("", true),
     (openBlock(true), createElementBlock(Fragment, null, renderList(_ctx.pcEntities, (v) => {
       return openBlock(), createBlock(VExpansionPanels, {
         multiple: "",
@@ -26057,9 +26297,9 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
                       style: { "gap": "12px" }
                     }, {
                       default: withCtx(() => [
-                        createBaseVNode("span", _hoisted_8, toDisplayString(_ctx.prettyEntityName(v.actor)), 1),
+                        createBaseVNode("span", _hoisted_15, toDisplayString(_ctx.prettyEntityName(v.actor)), 1),
                         createBaseVNode("span", null, "傷害: " + toDisplayString(v.totalDamage.toFixed(0)), 1),
-                        createBaseVNode("span", _hoisted_9, "(" + toDisplayString((100 * v.totalDamage / _ctx.allApplyDamage).toFixed(1)) + "%)", 1),
+                        createBaseVNode("span", _hoisted_16, "(" + toDisplayString((100 * v.totalDamage / _ctx.allApplyDamage).toFixed(1)) + "%)", 1),
                         createVNode(VDivider, {
                           vertical: "",
                           class: "mx-1"
@@ -26069,12 +26309,12 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
                           vertical: "",
                           class: "mx-1"
                         }),
-                        createBaseVNode("span", _hoisted_10, "活躍DPS: " + toDisplayString(_ctx.calculateActiveDps(v.damages, _ctx.activeDpsBuffer)), 1),
+                        createBaseVNode("span", _hoisted_17, "活躍DPS: " + toDisplayString(_ctx.calculateActiveDps(v.damages, _ctx.activeDpsBuffer)), 1),
                         createVNode(VDivider, {
                           vertical: "",
                           class: "mx-1"
                         }),
-                        createBaseVNode("span", _hoisted_11, "暴擊率: " + toDisplayString(_ctx.calculateCriticalRate(v.damages)), 1)
+                        createBaseVNode("span", _hoisted_18, "暴擊率: " + toDisplayString(_ctx.calculateCriticalRate(v.damages)), 1)
                       ]),
                       _: 2
                     }, 1024)
@@ -26098,7 +26338,7 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
                                 width: "32",
                                 height: "32",
                                 src: `/res/skillimage/${_ctx.region}/${skillId}/${skillId}.png`
-                              }, null, 8, _hoisted_12)
+                              }, null, 8, _hoisted_19)
                             ]),
                             _: 2
                           }, 1024),
@@ -26115,23 +26355,23 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
                                   var _a, _b;
                                   return [
                                     createBaseVNode("div", null, [
-                                      createBaseVNode("span", _hoisted_13, toDisplayString(_ctx.formatSkillName(+skillId)), 1),
-                                      _hoisted_14,
-                                      createTextVNode(),
-                                      createBaseVNode("span", _hoisted_15, toDisplayString(damageBySkill.toFixed(0)), 1),
-                                      _hoisted_16,
-                                      createTextVNode(),
-                                      createBaseVNode("span", _hoisted_17, toDisplayString(v.groupedCount[+skillId]), 1),
-                                      createBaseVNode("span", _hoisted_18, "avgDamage: " + toDisplayString((v.groupedCount[+skillId] ? damageBySkill / v.groupedCount[+skillId] : 0).toFixed(0)), 1),
-                                      createBaseVNode("span", _hoisted_19, "minDamage: " + toDisplayString(((_a = v.groupedMinDamages[+skillId]) == null ? void 0 : _a.toFixed(0)) || "0"), 1),
-                                      createBaseVNode("span", _hoisted_20, "maxDamage: " + toDisplayString(((_b = v.groupedMaxDamages[+skillId]) == null ? void 0 : _b.toFixed(0)) || "0"), 1),
+                                      createBaseVNode("span", _hoisted_20, toDisplayString(_ctx.formatSkillName(+skillId)), 1),
                                       _hoisted_21,
                                       createTextVNode(),
-                                      createBaseVNode("span", _hoisted_22, toDisplayString((100 * damageBySkill / v.totalDamage).toFixed(1)) + "%", 1),
-                                      !_ctx.isExcludedSkill(+skillId) ? (openBlock(), createElementBlock("span", _hoisted_23, "暴擊率: " + toDisplayString(_ctx.calculateSkillCriticalRate(v.groupedDamages[+skillId])), 1)) : createCommentVNode("", true)
+                                      createBaseVNode("span", _hoisted_22, toDisplayString(damageBySkill.toFixed(0)), 1),
+                                      _hoisted_23,
+                                      createTextVNode(),
+                                      createBaseVNode("span", _hoisted_24, toDisplayString(v.groupedCount[+skillId]), 1),
+                                      createBaseVNode("span", _hoisted_25, "avgDamage: " + toDisplayString((v.groupedCount[+skillId] ? damageBySkill / v.groupedCount[+skillId] : 0).toFixed(0)), 1),
+                                      createBaseVNode("span", _hoisted_26, "minDamage: " + toDisplayString(((_a = v.groupedMinDamages[+skillId]) == null ? void 0 : _a.toFixed(0)) || "0"), 1),
+                                      createBaseVNode("span", _hoisted_27, "maxDamage: " + toDisplayString(((_b = v.groupedMaxDamages[+skillId]) == null ? void 0 : _b.toFixed(0)) || "0"), 1),
+                                      _hoisted_28,
+                                      createTextVNode(),
+                                      createBaseVNode("span", _hoisted_29, toDisplayString((100 * damageBySkill / v.totalDamage).toFixed(1)) + "%", 1),
+                                      !_ctx.isExcludedSkill(+skillId) ? (openBlock(), createElementBlock("span", _hoisted_30, "暴擊率: " + toDisplayString(_ctx.calculateSkillCriticalRate(v.groupedDamages[+skillId])), 1)) : createCommentVNode("", true)
                                     ]),
-                                    (_ctx.showBuffCoverage || _ctx.showDebuffCoverage) && _ctx.getSkillConditionCoverage(v.groupedDamages[skillId], _ctx.showBuffCoverage, _ctx.showDebuffCoverage, _ctx.showRawBuffCoverage).length > 0 ? (openBlock(), createElementBlock("div", _hoisted_24, [
-                                      (openBlock(true), createElementBlock(Fragment, null, renderList(_ctx.getSkillConditionCoverage(v.groupedDamages[skillId], _ctx.showBuffCoverage, _ctx.showDebuffCoverage, _ctx.showRawBuffCoverage), (c) => {
+                                    _ctx.showBuffCoverage && _ctx.getSkillConditionCoverage(v.groupedDamages[skillId], _ctx.showBuffCoverage, _ctx.showRawBuffCoverage).length > 0 ? (openBlock(), createElementBlock("div", _hoisted_31, [
+                                      (openBlock(true), createElementBlock(Fragment, null, renderList(_ctx.getSkillConditionCoverage(v.groupedDamages[skillId], _ctx.showBuffCoverage, _ctx.showRawBuffCoverage), (c) => {
                                         return openBlock(), createElementBlock("div", {
                                           key: c.label || c.ccId,
                                           class: "d-flex align-center bg-grey-darken-4 px-1 rounded text-caption",
@@ -26141,11 +26381,33 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
                                             width: "16",
                                             height: "16",
                                             src: `/res/characterconditionimage/${_ctx.region}/${c.ccId}/${c.ccId}.png`
-                                          }, null, 8, _hoisted_25),
+                                          }, null, 8, _hoisted_32),
                                           createBaseVNode("span", null, [
                                             createTextVNode(toDisplayString(c.label || _ctx.condNameMap[c.ccId] || `CC:${c.ccId}`) + ": ", 1),
                                             createBaseVNode("b", null, toDisplayString(c.percentage.toFixed(1)) + "%", 1)
-                                          ])
+                                          ]),
+                                          _ctx.hasMusicBuffDisplay(c.ccId) ? (openBlock(), createBlock(VTooltip, {
+                                            key: 0,
+                                            activator: "parent",
+                                            location: "bottom",
+                                            "max-width": "420"
+                                          }, {
+                                            default: withCtx(() => [
+                                              createBaseVNode("div", _hoisted_33, toDisplayString(_ctx.condNameMap[c.ccId] || `CC:${c.ccId}`) + " — 生效期間的加成數值 ", 1),
+                                              (openBlock(true), createElementBlock(Fragment, null, renderList(_ctx.computeMusicBuffBreakdown(v.groupedDamages[skillId], c.ccId), (b) => {
+                                                return openBlock(), createElementBlock("div", {
+                                                  key: b.text,
+                                                  class: "d-flex justify-space-between",
+                                                  style: { "gap": "12px" }
+                                                }, [
+                                                  createBaseVNode("span", null, toDisplayString(b.text), 1),
+                                                  createBaseVNode("b", null, toDisplayString(b.percentage.toFixed(1)) + "%", 1)
+                                                ]);
+                                              }), 128)),
+                                              _hoisted_34
+                                            ]),
+                                            _: 2
+                                          }, 1024)) : createCommentVNode("", true)
                                         ]);
                                       }), 128))
                                     ])) : createCommentVNode("", true)
@@ -37970,4 +38232,4 @@ app.config.errorHandler = (err) => {
   console.error(err);
 };
 app.use(vuetify).mount("#app");
-//# sourceMappingURL=index-BjYcCzfx.js.map
+//# sourceMappingURL=index-zUZ6QvPr.js.map

@@ -59,6 +59,9 @@ type eventCharacterConditionEnable struct {
 	CCId       uint32
 	DisableAt  int64
 	AttackerId string
+	// 效果參數字串,只有 conditionParamCCIds 內的條件才會帶
+	// (94% 的條件都有參數,全部輸出會讓 ndjson 多出 ~15% 體積)
+	Params string `json:",omitempty"`
 }
 
 type eventCharacterConditionDisable struct {

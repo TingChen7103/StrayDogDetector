@@ -54,6 +54,12 @@ func ParseCharacterConditionPacket(p *GamePacket) (*CharacterConditionPacket, er
 
 	disableAt := util.ParseMabiTime(disableAtRaw).Unix()
 
+	// Msg[3] 是效果參數字串 (音樂 buff 的實際加成數值就在這裡)
+	params := ""
+	if p.Msg[3].Type() == MessageElemTypeString {
+		params = p.Msg[3].Data().(string)
+	}
+
 	v := &CharacterConditionPacket{
 		Id:       p.Id,
 		IsEnable: true,
@@ -61,6 +67,7 @@ func ParseCharacterConditionPacket(p *GamePacket) (*CharacterConditionPacket, er
 			CCId:       ccId,
 			DisableAt:  disableAt,
 			AttackerId: attackerId,
+			Params:     params,
 		},
 	}
 

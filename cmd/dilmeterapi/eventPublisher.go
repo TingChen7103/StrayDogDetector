@@ -84,6 +84,95 @@ const (
 	opcodeConditionUpdate   = 0xa028
 )
 
+/*
+	延遲傷害 (op 0x9095) 的效果類型 id。
+
+	連續攻擊、星塵等技能的傷害不走一般的 CombatAction,而是由這個
+	「延遲效果」封包送出,靠 Msg[1] 的類型 id 辨識。
+
+	這個 id 是遊戲資料表中的「位置索引」而非固定代號,只要改版在它前面
+	插入新項目,整串就會往後位移一格 —— 這就是為什麼它每次改版都會變
+	(318 -> 319 正是插入一筆的典型 +1 位移)。
+
+	因此這裡接受一組已知 id 而非單一值: 保留舊值可讓過去錄製的 pcapng /
+	ndjson 仍能正確重播,新值則對應改版後的封包。
+	若下次改版又位移,程式會在 log 印出 "unknown delayed-damage ttype",
+	直接把新的號碼告訴你,補進這個 map 即可。
+*/
+var delayedDamageTypeSet = map[uint32]bool{
+	318: true, // 2026-08 改版前
+	319: true, // 2026-08 改版後
+}
+
+/*
+	延遲傷害封包的訊息結構: Int(delay), Int(type), Int(damage), Byte,
+	Int, Long(attackerId), Short(skillId)。
+
+	實測 3 份擷取檔中所有 op 0x9095 的類型,只有延遲傷害是這個結構,
+	其餘型別的結構都不同,因此可用來辨識「這其實是延遲傷害,只是 id 變了」。
+*/
+func isDelayedDamageShape(msg packet.Message) bool {
+	if len(msg) < 7 {
+		return false
+	}
+
+	want := []packet.MessageElemType{
+		packet.MessageElemTypeInt,
+		packet.MessageElemTypeInt,
+		packet.MessageElemTypeInt,
+		packet.MessageElemTypeByte,
+		packet.MessageElemTypeInt,
+		packet.MessageElemTypeLong,
+		packet.MessageElemTypeShort,
+	}
+
+	for i, t := range want {
+		if msg[i].Type() != t {
+			return false
+		}
+	}
+
+	return true
+}
+
+var warnedDelayedTypes = map[uint32]bool{}
+
+// 同一個未知 id 只警告一次,避免洗版
+func warnUnknownDelayedType(ttype uint32) {
+	if warnedDelayedTypes[ttype] {
+		return
+	}
+	warnedDelayedTypes[ttype] = true
+
+	logger.Printf("unknown delayed-damage ttype %d -- 看起來是連續攻擊/星塵的延遲傷害封包,"+
+		"但類型 id 不在已知清單中 (可能又改版位移了)。"+
+		"請把 %d 加進 eventPublisher.go 的 delayedDamageTypeSet", ttype, ttype)
+}
+
+/*
+	需要保留「效果參數字串」的條件 id。
+
+	條件封包的參數字串帶著該次施放的實際加成數值 (例如戰場的序曲的
+	最大攻擊力%、活潑板的魔法攻擊力%)。實測 94.4% 的條件都帶參數,
+	全部輸出會讓 ndjson 多出約 15% 體積,因此只保留真的要顯示數值的條件。
+
+	前端的顯示欄位設定在 front/src/conditionWhitelist.ts 的 musicBuffDisplay,
+	要新增條件時兩邊都要加。
+*/
+var conditionParamCCIds = map[uint32]bool{
+	680: true, // 戰場的序曲
+	192: true, // 活潑板
+	193: true, // 進行曲
+}
+
+// 只有白名單內的條件才輸出參數字串,其餘回傳空字串
+func conditionParams(ccId uint32, params string) string {
+	if !conditionParamCCIds[ccId] {
+		return ""
+	}
+	return params
+}
+
 // 人偶召喚物種族白名單: 幕演出實體(990104)、皮埃羅(990125)、巨靈(990204)、傀儡實體(990213)
 // 990104 是「第X幕」系技能實際造成傷害的臨時召喚實體 (2026-07-29 兩人隊實測確認)
 var marionetteRaceSet = map[uint32]bool{
@@ -189,6 +278,7 @@ func (t *eventPublisher) loop() {
 						CCId:       v.CCId,
 						DisableAt:  v.DisableAt,
 						AttackerId: attackerId,
+						Params:     conditionParams(v.CCId, v.Params),
 					}
 
 					t.publish(e)
@@ -573,9 +663,16 @@ func (t *eventPublisher) loop() {
 
 				delay := p.Msg[0].Data().(uint32)
 				ttype := p.Msg[1].Data().(uint32)
-				if ttype != 318 {
+				if !delayedDamageTypeSet[ttype] {
 					_ = delay
-					// 연공 블래스트가 아님
+
+					// 연공 블래스트가 아님。
+					// 但若封包長得就是延遲傷害的樣子 (Int,Int,Int,Byte,Int,Long,Short),
+					// 代表改版又把類型 id 位移了 —— 把號碼印出來以便補進 delayedDamageTypeSet
+					if isDelayedDamageShape(p.Msg) {
+						warnUnknownDelayedType(ttype)
+					}
+
 					continue
 				}
 
@@ -672,6 +769,7 @@ func (t *eventPublisher) loop() {
 					CCId:       cond.CCId,
 					DisableAt:  cond.DisableAt,
 					AttackerId: attackerId,
+					Params:     conditionParams(cond.CCId, cond.Params),
 				}
 				t.publish(e)
 
@@ -741,6 +839,7 @@ func (t *eventPublisher) addClient(ctx context.Context, ch chan<- iEvent) uint32
 				CCId:       cond.CCId,
 				DisableAt:  cond.DisableAt,
 				AttackerId: attackerId,
+				Params:     conditionParams(cond.CCId, cond.Params),
 			}
 
 			events = append(events, e)

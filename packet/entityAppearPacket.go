@@ -53,6 +53,11 @@ type EntityCharacterCondition struct {
 	CCId       uint32
 	DisableAt  int64
 	AttackerId uint64
+
+	// 效果參數字串,格式 `鍵:型別:值;` (型別 f=float、b=bool、8=時間戳)。
+	// 例如戰場的序曲: `MCMBAMIN:f:66.363777;MCMBAMAX:f:66.363777;MCMBAC:f:34.928299;...`
+	// 只有需要顯示數值的條件才會被填入 (見 eventPublisher 的 conditionParamCCIds)
+	Params string
 }
 
 func ParseEntityAppearPacket(msg Message) (retV *EntityInfo, retErr error) {
@@ -458,10 +463,17 @@ func ParseEntityAppearPacket(msg Message) (retV *EntityInfo, retErr error) {
 
 		attackerId := msg[3].Data().(uint64)
 
+		// msg[2] 是效果參數字串 (音樂 buff 的實際加成數值就在這裡)
+		params := ""
+		if msg[2].Type() == MessageElemTypeString {
+			params = msg[2].Data().(string)
+		}
+
 		v.CharacterConditionMap[ccId] = &EntityCharacterCondition{
 			CCId:       ccId,
 			DisableAt:  disableAt,
 			AttackerId: attackerId,
+			Params:     params,
 		}
 	}
 

@@ -542,6 +542,7 @@ export class EntityActor extends BaseActor {
             CCId: event.CCId,
             DisableAt: event.DisableAt,
             AttackerId: event.AttackerId,
+            Params: event.Params,
         };
 
         const prev = this._conditionHistory.length ? this._conditionHistory[this._conditionHistory.length - 1].List : [];
@@ -697,6 +698,8 @@ export type EntityCondition = {
     CCId: number;
     DisableAt: number;
     AttackerId: string;
+    /** 效果參數字串 (該次施放的實際加成數值),見 conditionWhitelist.musicBuffDisplay */
+    Params?: string;
 }
 
 type EntityConditionState = {

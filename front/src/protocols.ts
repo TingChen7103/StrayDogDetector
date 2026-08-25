@@ -43,6 +43,8 @@ export type eventCharacterConditionEnable = eventBase & {
     CCId: number;
     DisableAt: number;
     AttackerId: string;
+    /** 效果參數字串,只有音樂 buff 等需要顯示數值的條件才會帶 */
+    Params?: string;
 }
 
 export type eventCharacterConditionDisable = eventBase & {
